@@ -28,7 +28,7 @@ app.use("/api/projects",  require("./routes/projectRoutes"));
 app.use("/api/issues",    require("./routes/issueRoutes"));
 app.use("/api/dashboard", require("./routes/dashboardRoutes"));
 app.use("/api/users",     require("./routes/userRoutes"));
-app.use("/api/admin",     require("./routes/adminRoutes"));
+app.use("/api/admin",     require("./routes/AdminRoutes"));
 
 io.on("connection", (socket) => {
   console.log("User connected:", socket.id);
