@@ -21,7 +21,7 @@
 import axios from "axios";
 
 const api = axios.create({
-  baseURL: "http://localhost:5000/api",
+  baseURL: "http://localhost:5001/api",
 });
 
 // REQUEST: Sends the token to the server
@@ -33,7 +33,6 @@ api.interceptors.request.use((req) => {
   return req;
 }, (error) => Promise.reject(error));
 
-// RESPONSE: Handles the 401 redirect only if the token is actually dead
 api.interceptors.response.use(
   (response) => response,
   (error) => {
