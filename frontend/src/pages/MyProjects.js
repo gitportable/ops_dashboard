@@ -1,369 +1,282 @@
-import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
-import axios from '../api/axios';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { useContext, useState, useEffect, useCallback } from "react";
+import { AuthContext } from "../auth/AuthContext";
+import { getMyProjects } from "../api/projectApi";
+import { getProjectIssues } from "../api/issueApi";
+import IssueTableDeveloper from "../components/IssueTableDeveloper";
+import IssueTableTester from "../components/IssueTableTester";
+const pid = (p) =>
+  p?.projectid ?? p?.project_id ?? p?.id ?? p?.ProjectID ?? p?.projectId;
+const pname = (p, id) =>
+  p?.projectname ?? p?.name ?? p?.project_name ?? p?.ProjectName ?? (id ? `Project ${id}` : "Project");
 
-const fetchMyProjects = async () => axios.get('/projects/my-projects').then(res => res.data);
-const fetchProjectIssues = async (projectId) => axios.get(`/issues?project=${projectId}`).then(res => res.data);
-const fetchProjectInsights = async (projectId) => axios.get(`/projects/${projectId}/insights`).then(res => res.data);
-const updateIssue = async (issueId, data) => axios.put(`/issues/${issueId}`, data).then(res => res.data);
-const submitSprintRequest = async (projectId, data) => axios.post(`/projects/${projectId}/sprint-request`, data).then(res => res.data);
+const statusStyle = (s = "") => {
+  const m = {
+    "active":        { dot: "#16a34a", bg: "#dcfce7", color: "#16a34a" },
+    "in progress":   { dot: "#1d4ed8", bg: "#dbeafe", color: "#1d4ed8" },
+    "completed":     { dot: "#7c3aed", bg: "#f5f3ff", color: "#7c3aed" },
+    "on hold":       { dot: "#f59e0b", bg: "#fef9c3", color: "#a16207" },
+    "planning":      { dot: "#9ca3af", bg: "#f3f4f6", color: "#6b7280" },
+    "blocked":       { dot: "#dc2626", bg: "#fef2f2", color: "#dc2626" },
+  };
+  return m[s.toLowerCase()] || m["planning"];
+};
 
 const MyProjects = () => {
+  const { role, user } = useContext(AuthContext) || {};
+  const currentRole = (role || user?.role || "").toLowerCase();
+  const isDeveloper = currentRole === "developer";
+
+  const [projects, setProjects]               = useState([]);
   const [selectedProject, setSelectedProject] = useState(null);
-  const [issueToUpdate, setIssueToUpdate] = useState(null);
-  const queryClient = useQueryClient();
+  const [issues, setIssues]                   = useState([]);
+  const [view, setView]                       = useState("current");
+  const [loadingProjects, setLoadingProjects] = useState(true);
+  const [loadingIssues, setLoadingIssues]     = useState(false);
+  const [projectError, setProjectError]       = useState(null);
+  const [issueError, setIssueError]           = useState(null);
 
-  const { data: projects = [], isLoading } = useQuery({
-    queryKey: ['myProjects'],
-    queryFn: fetchMyProjects
-  });
+  useEffect(() => {
+    setLoadingProjects(true);
+    getMyProjects()
+      .then((res) => {
+        const raw  = res?.data ?? res;
+        const list = Array.isArray(raw) ? raw : [];
+        console.log("[MyProjects] received", list.length, "projects, first item keys:", list[0] ? Object.keys(list[0]) : "none");
+        setProjects(list);
+    
+        const first = list.find((p) => pid(p) != null);
+        if (first) setSelectedProject(first);
+      })
+      .catch((err) => {
+        console.error("[MyProjects] fetch error:", err);
+        setProjectError("Failed to load your projects.");
+      })
+      .finally(() => setLoadingProjects(false));
+  }, []);
 
-  const { data: issues = [] } = useQuery({
-    queryKey: ['projectIssues', selectedProject?.projectid],
-    queryFn: () => fetchProjectIssues(selectedProject.projectid),
-    enabled: !!selectedProject
-  });
-
-  const { data: insights } = useQuery({
-    queryKey: ['projectInsights', selectedProject?.projectid],
-    queryFn: () => fetchProjectInsights(selectedProject.projectid),
-    enabled: !!selectedProject
-  });
-
-  const updateIssueMutation = useMutation({
-    mutationFn: updateIssue,
-    onSuccess: () => {
-      queryClient.invalidateQueries(['projectIssues']);
-      setIssueToUpdate(null);
+  const loadIssues = useCallback((project) => {
+    const id = pid(project);
+    if (id == null) {
+      console.warn("[MyProjects] selected project has no ID:", project);
+      return;
     }
-  });
+    setLoadingIssues(true);
+    setIssueError(null);
+    getProjectIssues(id)
+      .then((data) => {
+        const rows = Array.isArray(data) ? data : data?.data ?? [];
+        setIssues(rows);
+      })
+      .catch((err) => {
+        console.error("[MyProjects] issue fetch error:", err);
+        setIssueError("Failed to load issues for this project.");
+      })
+      .finally(() => setLoadingIssues(false));
+  }, []);
 
-  const sprintRequestMutation = useMutation({
-    mutationFn: submitSprintRequest,
-    onSuccess: () => alert('Sprint change requested - awaiting admin approval')
-  });
+  useEffect(() => {
+    if (selectedProject) loadIssues(selectedProject);
+  }, [selectedProject, loadIssues]);
 
-  if (isLoading) return <div style={{ padding: '2rem', marginLeft: '260px' }}>Loading projects...</div>;
+  const currentIssues = issues.filter(
+    (i) => !["done", "closed", "verified"].includes((i.status || "").toLowerCase())
+  );
+  const historyIssues = issues.filter(
+    (i) => ["done", "closed", "verified"].includes((i.status || "").toLowerCase())
+  );
+  const displayIssues = view === "current" ? currentIssues : historyIssues;
+  const IssueTable    = isDeveloper ? IssueTableDeveloper : IssueTableTester;
 
-  if (projects.length === 0) return <div style={{ padding: '2rem', marginLeft: '260px' }}>No projects assigned. Contact admin.</div>;
+  if (loadingProjects) return (
+    <div style={{ padding: "3rem", textAlign: "center", color: "#6b7280", fontFamily: "'Inter',sans-serif" }}>
+      Loading your projects…
+    </div>
+  );
+  if (projectError) return (
+    <div style={{ padding: "1rem", background: "#fee2e2", color: "#991b1b", borderRadius: 8, margin: "2rem" }}>
+      {projectError}
+    </div>
+  );
+  if (!projects.length) return (
+    <div style={{ padding: "3rem", textAlign: "center", color: "#6b7280", fontFamily: "'Inter',sans-serif" }}>
+      <div style={{ fontSize: "2.5rem", marginBottom: "0.5rem" }}>📋</div>
+      <p style={{ fontWeight: 600, fontSize: "1.1rem" }}>No projects assigned yet.</p>
+      <p style={{ fontSize: "0.85rem", marginTop: 4, color: "#94a3b8" }}>
+        Contact your admin to be added to a project.
+      </p>
+    </div>
+  );
+
+  const selId   = pid(selectedProject);
+  const selName = pname(selectedProject, selId);
 
   return (
-    <div style={{ padding: '2rem', marginLeft: '260px' }}>
-      <h1>My Assigned Projects</h1>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
-        {projects.map((project) => (
-          <div 
-            key={project.projectid}
-            onClick={() => setSelectedProject(project)}
-            style={{ cursor: 'pointer', background: selectedProject?.projectid === project.projectid ? '#e0f2fe' : 'white', borderRadius: '12px', padding: '1.5rem', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', border: '1px solid #e5e7eb' }}
-          >
-            <h3>{project.projectname}</h3>
-            <p>Status: {project.status}</p>
-            <p>Duration: {insights?.duration_days || 0} days</p>
-          </div>
-        ))}
-      </div>
+    <div style={{ padding: "1.5rem 2rem", fontFamily: "'Inter',sans-serif" }}>
+      <h1 style={{ fontSize: "1.4rem", fontWeight: 800, color: "#1e293b", marginBottom: 4 }}>
+        My Projects
+      </h1>
+      <p style={{ fontSize: "0.85rem", color: "#6b7280", marginBottom: "1.5rem" }}>
+        Projects assigned to you — click one to view its issues.
+      </p>
 
-      {selectedProject && (
-        <div>
-          <h2>Project: {selectedProject.projectname}</h2>
+      <div style={{ display: "flex", gap: "1.5rem", alignItems: "flex-start", flexWrap: "wrap" }}>
 
-          {/* Monthly Insights Graph */}
-          {insights?.monthly_insights?.length > 0 && (
-            <div style={{ marginBottom: '2rem' }}>
-              <h3>Monthly Bugs & Tasks Solved</h3>
-              <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={insights.monthly_insights}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="month" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="bugs_solved" fill="#ff7300" name="Bugs Solved" />
-                  <Bar dataKey="tasks_solved" fill="#82ca9d" name="Tasks Solved" />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {/* Sprint Request */}
-          <div style={{ marginBottom: '2rem', padding: '1rem', background: '#f3f4f6', borderRadius: '8px' }}>
-            <h3>Current Sprint</h3>
-            <p>Sprint: {issues[0]?.sprint || 'Not set'}</p>
-            <button 
-              onClick={() => {
-                const newSprint = prompt('Enter new sprint (e.g., Sprint 6)');
-                if (newSprint) {
-                  sprintRequestMutation.mutate({ projectId: selectedProject.projectid, newSprint, reason: 'Sprint progress update' });
-                }
-              }}
-              style={{ padding: '0.5rem 1rem', background: '#1e40af', color: 'white', border: 'none', borderRadius: '6px' }}
-            >
-              Request Sprint Change
-            </button>
+        <div style={{
+          width: 260, flexShrink: 0, background: "#fff",
+          borderRadius: 12, border: "1px solid #e5e7eb",
+          boxShadow: "0 2px 8px rgba(0,0,0,0.06)", overflow: "hidden",
+        }}>
+          <div style={{
+            padding: "12px 16px", background: "#1e3a8a", color: "#fff",
+            fontSize: "0.8rem", fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.05em",
+          }}>
+            Assigned Projects ({projects.length})
           </div>
 
-          {/* Issues Table with Update */}
-          <h3>Issues in This Project</h3>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead>
-              <tr style={{ background: '#1e40af', color: 'white' }}>
-                <th style={{ padding: '0.75rem' }}>ID</th>
-                <th style={{ padding: '0.75rem' }}>Type</th>
-                <th style={{ padding: '0.75rem' }}>Sprint</th>
-                <th style={{ padding: '0.75rem' }}>Status</th>
-                <th style={{ padding: '0.75rem' }}>Team</th>
-                <th style={{ padding: '0.75rem' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {issues.map((issue) => (
-                <tr key={issue.issueid} style={{ borderBottom: '1px solid #e5e7eb' }}>
-                  <td style={{ padding: '0.75rem' }}>{issue.issueid}</td>
-                  <td style={{ padding: '0.75rem' }}>{issue.issuetype}</td>
-                  <td style={{ padding: '0.75rem' }}>{issue.sprint}</td>
-                  <td style={{ padding: '0.75rem' }}>{issue.status}</td>
-                  <td style={{ padding: '0.75rem' }}>{issue.assigneeteam}</td>
-                  <td style={{ padding: '0.75rem' }}>
-                    <button 
-                      onClick={() => setIssueToUpdate(issue)}
-                      style={{ padding: '0.25rem 0.5rem', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px' }}
-                    >
-                      Update
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {projects.map((p) => {
+            const id        = pid(p);
+            const name      = pname(p, id);
+            const sc        = statusStyle(p.status);
+            const isSelected = pid(selectedProject) === id;
 
-          {/* Update Form */}
-          {issueToUpdate && (
-            <div style={{ position: 'fixed', top: '20%', left: '30%', background: 'white', padding: '2rem', boxShadow: '0 10px 25px rgba(0,0,0,0.2)', borderRadius: '8px', zIndex: 1000 }}>
-              <h3>Update Issue {issueToUpdate.issueid}</h3>
-              <form onSubmit={(e) => {
-                e.preventDefault();
-                const formData = new FormData(e.target);
-                updateIssueMutation.mutate({ 
-                  issueId: issueToUpdate.issueid, 
-                  sprint: formData.get('sprint'), 
-                  status: formData.get('status'), 
-                  description: formData.get('description') 
-                });
+            return (
+              <div
+                key={id ?? `proj-${name}`}
+                onClick={() => setSelectedProject(p)}
+                style={{
+                  padding: "12px 16px", cursor: "pointer",
+                  borderBottom: "1px solid #f1f5f9",
+                  background: isSelected ? "#eff6ff" : "#fff",
+                  borderLeft: isSelected ? "3px solid #1e40af" : "3px solid transparent",
+                  transition: "all 0.15s",
+                }}
+              >
+                <div style={{ fontWeight: 600, fontSize: "0.88rem", color: "#1e293b" }}>
+                  {name}
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 4 }}>
+                  
+                  <span style={{
+                    width: 8, height: 8, borderRadius: "50%",
+                    background: sc.dot, display: "inline-block", flexShrink: 0,
+                  }} />
+                  <span style={{
+                    fontSize: "0.7rem", fontWeight: 600,
+                    color: sc.color, background: sc.bg,
+                    padding: "1px 7px", borderRadius: 99,
+                  }}>
+                    {p.status || "Active"}
+                  </span>
+                  {p.member_role && (
+                    <span style={{ fontSize: "0.68rem", color: "#94a3b8" }}>
+                      {p.member_role}
+                    </span>
+                  )}
+                </div>
+                {p.issuecount != null && (
+                  <div style={{ fontSize: "0.72rem", color: "#94a3b8", marginTop: 3 }}>
+                    {p.issuecount} issues
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {selectedProject ? (
+            <>
+             
+              <div style={{
+                background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb",
+                padding: "16px 20px", marginBottom: "1rem",
+                boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
               }}>
-                <label>Sprint: <input name="sprint" defaultValue={issueToUpdate.sprint} required /></label><br />
-                <label>Status: <input name="status" defaultValue={issueToUpdate.status} required /></label><br />
-                <label>Description: <textarea name="description" defaultValue={issueToUpdate.description} /></label><br />
-                <button type="submit" style={{ padding: '0.5rem 1rem', background: '#1e40af', color: 'white', border: 'none', borderRadius: '6px' }}>Save</button>
-                <button type="button" onClick={() => setIssueToUpdate(null)} style={{ padding: '0.5rem 1rem', background: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', marginLeft: '0.5rem' }}>Cancel</button>
-              </form>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: 8 }}>
+                  <div>
+                    <h2 style={{ fontSize: "1.1rem", fontWeight: 700, color: "#1e293b", margin: 0 }}>
+                      {selName}
+                    </h2>
+                    {selectedProject.description && (
+                      <p style={{ fontSize: "0.83rem", color: "#6b7280", marginTop: 4 }}>
+                        {selectedProject.description}
+                      </p>
+                    )}
+                  </div>
+
+                  <div style={{ display: "flex", gap: 6 }}>
+                    {["current", "history"].map((v) => (
+                      <button key={v} onClick={() => setView(v)}
+                        style={{
+                          padding: "5px 14px", borderRadius: 99, fontSize: "0.8rem", fontWeight: 600,
+                          cursor: "pointer", border: "none",
+                          background: view === v ? "#1e40af" : "#f1f5f9",
+                          color: view === v ? "#fff" : "#475569",
+                        }}>
+                        {v === "current"
+                          ? `Active (${currentIssues.length})`
+                          : `History (${historyIssues.length})`}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {!loadingIssues && (
+                  <div style={{ display: "flex", gap: 8, marginTop: 12, flexWrap: "wrap" }}>
+                    {[
+                      { label: "Total",       val: issues.length },
+                      { label: "Open",        val: issues.filter(i => (i.status||"").toLowerCase() === "open").length },
+                      { label: "In Progress", val: issues.filter(i => (i.status||"").toLowerCase() === "in progress").length },
+                      { label: "Done",        val: issues.filter(i => (i.status||"").toLowerCase() === "done").length },
+                    ].map(s => (
+                      <div key={s.label} style={{
+                        padding: "5px 12px", background: "#f8fafc", borderRadius: 8,
+                        fontSize: "0.78rem", color: "#475569", border: "1px solid #e5e7eb",
+                      }}>
+                        <span style={{ fontWeight: 700 }}>{s.val}</span> {s.label}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {loadingIssues && (
+                <div style={{ padding: "2rem", textAlign: "center", color: "#6b7280" }}>Loading issues…</div>
+              )}
+              {issueError && (
+                <div style={{ padding: "1rem", background: "#fee2e2", color: "#991b1b", borderRadius: 8 }}>
+                  {issueError}
+                </div>
+              )}
+              {!loadingIssues && !issueError && (
+                displayIssues.length > 0 ? (
+                  <IssueTable
+                    issues={displayIssues}
+                    onRefresh={() => loadIssues(selectedProject)}
+                  />
+                ) : (
+                  <div style={{
+                    padding: "2.5rem", textAlign: "center", color: "#6b7280",
+                    background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb",
+                  }}>
+                    {view === "current" ? "No active issues in this project." : "No completed issues yet."}
+                  </div>
+                )
+              )}
+            </>
+          ) : (
+            <div style={{
+              padding: "3rem", textAlign: "center", color: "#9ca3af",
+              background: "#fff", borderRadius: 12, border: "1px solid #e5e7eb",
+            }}>
+              Select a project to view its issues.
             </div>
           )}
         </div>
-      )}
+      </div>
     </div>
   );
 };
 
 export default MyProjects;
 
-
-
-// import React, { useState } from 'react';
-// import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-// import { Link } from 'react-router-dom';
-// import axios from '../api/axios';
-// import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
-
-// const fetchMyProjects = async () => {
-//   const res = await axios.get('/projects/my-projects');
-//   return res.data;
-// };
-
-// const fetchProjectIssues = async (projectId) => {
-//   const res = await axios.get(`/issues?project=${projectId}`); // adjust to your API
-//   return res.data;
-// };
-
-// const fetchProjectInsights = async (projectId) => {
-//   const res = await axios.get(`/projects/${projectId}/insights`);
-//   return res.data;
-// };
-
-// const updateIssue = async (issueId, data) => {
-//   const res = await axios.put(`/issues/${issueId}`, data);
-//   return res.data;
-// };
-
-// const submitSprintRequest = async (projectId, data) => {
-//   const res = await axios.post(`/projects/${projectId}/sprint-request`, data);
-//   return res.data;
-// };
-
-// const MyProjects = () => {
-//   const [selectedProject, setSelectedProject] = useState(null);
-//   const [issueToUpdate, setIssueToUpdate] = useState(null);
-//   const queryClient = useQueryClient();
-
-//   const { data: projects = [], isLoading } = useQuery({
-//     queryKey: ['myProjects'],
-//     queryFn: fetchMyProjects
-//   });
-
-//   const { data: issues = [] } = useQuery({
-//     queryKey: ['projectIssues', selectedProject?.projectid],
-//     queryFn: () => fetchProjectIssues(selectedProject.projectid),
-//     enabled: !!selectedProject
-//   });
-
-//   const { data: insights } = useQuery({
-//     queryKey: ['projectInsights', selectedProject?.projectid],
-//     queryFn: () => fetchProjectInsights(selectedProject.projectid),
-//     enabled: !!selectedProject
-//   });
-
-//   const updateIssueMutation = useMutation({
-//     mutationFn: updateIssue,
-//     onSuccess: () => {
-//       queryClient.invalidateQueries(['projectIssues']);
-//       setIssueToUpdate(null);
-//     }
-//   });
-
-//   const sprintRequestMutation = useMutation({
-//     mutationFn: submitSprintRequest,
-//     onSuccess: () => {
-//       alert('Sprint change requested - awaiting admin approval');
-//     }
-//   });
-
-//   if (isLoading) return <div>Loading projects...</div>;
-
-//   if (projects.length === 0) return <div>No projects assigned.</div>;
-
-//   return (
-//     <div style={{ padding: '2rem', marginLeft: '260px' }}>
-//       <h1>My Assigned Projects</h1>
-//       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
-//         {projects.map((project) => (
-//           <div 
-//             key={project.projectid}
-//             onClick={() => setSelectedProject(project)}
-//             style={{ cursor: 'pointer', background: selectedProject?.projectid === project.projectid ? '#e0f2fe' : 'white', borderRadius: '12px', padding: '1.5rem', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', border: '1px solid #e5e7eb' }}
-//           >
-//             <h3>{project.projectname}</h3>
-//             <p>Status: {project.status}</p>
-//             <p>Duration: {insights?.duration_days || 0} days</p>
-//           </div>
-//         ))}
-//       </div>
-
-//       {selectedProject && (
-//         <div>
-//           <h2>Project: {selectedProject.projectname}</h2>
-
-//           {/* Insights Chart - Monthly Bugs/Tasks Solved */}
-//           {insights?.monthly_insights?.length > 0 && (
-//             <div style={{ marginBottom: '2rem' }}>
-//               <h3>Monthly Bugs & Tasks Solved</h3>
-//               <ResponsiveContainer width="100%" height={300}>
-//                 <BarChart data={insights.monthly_insights}>
-//                   <CartesianGrid strokeDasharray="3 3" />
-//                   <XAxis dataKey="month" />
-//                   <YAxis />
-//                   <Tooltip />
-//                   <Bar dataKey="bugs_solved" fill="#ff7300" name="Bugs Solved" />
-//                   <Bar dataKey="tasks_solved" fill="#82ca9d" name="Tasks Solved" />
-//                 </BarChart>
-//               </ResponsiveContainer>
-//             </div>
-//           )}
-
-//           {/* Current Sprint & Request Update */}
-//           <div style={{ marginBottom: '2rem', padding: '1rem', background: '#f3f4f6', borderRadius: '8px' }}>
-//             <h3>Current Sprint</h3>
-//             <p>Sprint: {issues[0]?.sprint || 'Not set'}</p>
-//             <button 
-//               onClick={() => {
-//                 const newSprint = prompt('Enter new sprint (e.g., Sprint 6)');
-//                 if (newSprint) {
-//                   sprintRequestMutation.mutate({ projectId: selectedProject.projectid, newSprint, reason: 'Sprint progress update' });
-//                 }
-//               }}
-//               style={{ padding: '0.5rem 1rem', background: '#1e40af', color: 'white', border: 'none', borderRadius: '6px' }}
-//             >
-//               Request Sprint Change
-//             </button>
-//           </div>
-
-//           {/* Issues List with Update Form */}
-//           <h3>Issues in This Project</h3>
-//           <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-//             <thead>
-//               <tr style={{ background: '#1e40af', color: 'white' }}>
-//                 <th style={{ padding: '0.75rem' }}>Issue ID</th>
-//                 <th style={{ padding: '0.75rem' }}>Type</th>
-//                 <th style={{ padding: '0.75rem' }}>Sprint</th>
-//                 <th style={{ padding: '0.75rem' }}>Status</th>
-//                 <th style={{ padding: '0.75rem' }}>Assignee Team</th>
-//                 <th style={{ padding: '0.75rem' }}>Actions</th>
-//               </tr>
-//             </thead>
-//             <tbody>
-//               {issues.map((issue) => (
-//                 <tr key={issue.issueid} style={{ borderBottom: '1px solid #e5e7eb' }}>
-//                   <td style={{ padding: '0.75rem' }}>{issue.issueid}</td>
-//                   <td style={{ padding: '0.75rem' }}>{issue.issuetype}</td>
-//                   <td style={{ padding: '0.75rem' }}>{issue.sprint}</td>
-//                   <td style={{ padding: '0.75rem' }}>{issue.status}</td>
-//                   <td style={{ padding: '0.75rem' }}>{issue.assigneeteam}</td>
-//                   <td style={{ padding: '0.75rem' }}>
-//                     <button 
-//                       onClick={() => setIssueToUpdate(issue)}
-//                       style={{ padding: '0.25rem 0.5rem', background: '#10b981', color: 'white', border: 'none', borderRadius: '4px', marginRight: '0.5rem' }}
-//                     >
-//                       Update
-//                     </button>
-//                   </td>
-//                 </tr>
-//               ))}
-//             </tbody>
-//           </table>
-
-//           {/* Update Issue Form (modal-like) */}
-//           {issueToUpdate && (
-//             <div style={{ position: 'fixed', top: '20%', left: '30%', background: 'white', padding: '2rem', boxShadow: '0 10px 25px rgba(0,0,0,0.2)', borderRadius: '8px', zIndex: 1000 }}>
-//               <h3>Update Issue {issueToUpdate.issueid}</h3>
-//               <form onSubmit={(e) => {
-//                 e.preventDefault();
-//                 updateIssueMutation.mutate({ issueId: issueToUpdate.issueid, ...Object.fromEntries(new FormData(e.target)) });
-//               }}>
-//                 <label>
-//                   Sprint:
-//                   <input name="sprint" defaultValue={issueToUpdate.sprint} required />
-//                 </label><br />
-//                 <label>
-//                   Status:
-//                   <input name="status" defaultValue={issueToUpdate.status} required />
-//                 </label><br />
-//                 <label>
-//                   Description:
-//                   <textarea name="description" defaultValue={issueToUpdate.description} />
-//                 </label><br />
-//                 <button type="submit" style={{ padding: '0.5rem 1rem', background: '#1e40af', color: 'white', border: 'none', borderRadius: '6px' }}>
-//                   Save Changes
-//                 </button>
-//                 <button type="button" onClick={() => setIssueToUpdate(null)} style={{ padding: '0.5rem 1rem', background: '#6b7280', color: 'white', border: 'none', borderRadius: '6px', marginLeft: '0.5rem' }}>
-//                   Cancel
-//                 </button>
-//               </form>
-//             </div>
-//           )}
-//         </div>
-//       )}
-//     </div>
-//   );
-// };
-
-// export default MyProjects;
