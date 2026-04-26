@@ -1,0 +1,1 @@
+{"issues":["issueid","projectid","sprint","issuetype","createddate","closeddate","assigneeteam","batch_lot","production_stage","defect_type","severity","image_url","rca","capa","vendor_id"],"projects":["projectid","projectname","status","startdate","enddate","budgetallocated","budgetused"]}

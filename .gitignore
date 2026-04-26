@@ -1,0 +1,50 @@
+# ────────── Node / npm ──────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# ────────── Environment / Secrets ──────────
+.env
+.env.*
+*.pem
+*.key
+
+# ────────── Build outputs ──────────
+frontend/build/
+backend/build/
+dist/
+
+# ────────── VS Code / IDE ──────────
+.vscode/
+.idea/
+
+# ────────── History / temp files ──────────
+.history/
+*.tmp
+*.temp
+*.swp
+
+# ────────── OS files ──────────
+.DS_Store
+Thumbs.db
+
+# ────────── Debug / scratch files ──────────
+backend/debug_status.js
+backend/verify_db.js
+backend/force_seed.js
+backend/hash.js
+backend/check_wo.js
+backend/scratch.js
+backend/patch-data.js
+backend/migrate_subtasks.js
+backend/schema.json
+scratch/
+
+# ────────── Logs ──────────
+logs/
+*.log
+
+# ────────── Coverage ──────────
+coverage/
