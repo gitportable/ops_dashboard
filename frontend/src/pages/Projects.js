@@ -24,7 +24,7 @@ const healthScore = (p) => {
   return            { score:'Healthy',  color:'#16a34a', bg:'#dcfce7' };
 };
 
-const ProjectCard = ({ project, role, onDelete, onStatusChange, onClick }) => {
+const ProjectCard = ({ project, role, onDelete, onStatusChange, onClick, onKanban, onSprintPlan }) => {
   const id         = pid(project);
   const [bg, textC] = statusColor(project.status);
   const health     = healthScore(project);
@@ -33,6 +33,7 @@ const ProjectCard = ({ project, role, onDelete, onStatusChange, onClick }) => {
   const budgetPct   = budgetTotal ? Math.min(100, Math.round((budgetUsed / budgetTotal) * 100)) : null;
   const budgetColor = budgetPct > 85 ? '#dc2626' : budgetPct > 65 ? '#f59e0b' : '#16a34a';
   const isSA = role === 'superadmin';
+  const canViewKanban = role === 'admin' || role === 'superadmin';
 
   return (
     <div
@@ -82,23 +83,43 @@ const ProjectCard = ({ project, role, onDelete, onStatusChange, onClick }) => {
         </div>
       )}
 
-      {isSA && id && (
+      {(isSA || canViewKanban) && id && (
         <div style={{ display:'flex', gap:6, marginTop:4 }} onClick={e => e.stopPropagation()}>
-          <select
-            value={project.status || 'Active'}
-            onChange={e => onStatusChange(id, e.target.value)}
-            style={{ padding:'4px 8px', borderRadius:6, border:'1px solid #e5e7eb',
-              fontSize:'0.75rem', outline:'none', flex:1, background:'#f8fafc' }}>
-            {['Planning','Active','In Progress','On Hold','Completed','Cancelled'].map(s => (
-              <option key={s} value={s}>{s}</option>
-            ))}
-          </select>
-          <button
-            onClick={() => onDelete(id, project.projectname || project.name)}
-            style={{ padding:'4px 10px', background:'#fef2f2', color:'#dc2626',
-              border:'1px solid #fca5a5', borderRadius:6, fontSize:'0.75rem', cursor:'pointer', fontWeight:600 }}>
-            Delete
-          </button>
+          {isSA && (
+            <>
+              <select
+                value={project.status || 'Active'}
+                onChange={e => onStatusChange(id, e.target.value)}
+                style={{ padding:'4px 8px', borderRadius:6, border:'1px solid #e5e7eb',
+                  fontSize:'0.75rem', outline:'none', flex:1, background:'#f8fafc' }}>
+                {['Planning','Active','In Progress','On Hold','Completed','Cancelled'].map(s => (
+                  <option key={s} value={s}>{s}</option>
+                ))}
+              </select>
+              <button
+                onClick={() => onDelete(id, project.projectname || project.name)}
+                style={{ padding:'4px 10px', background:'#fef2f2', color:'#dc2626',
+                  border:'1px solid #fca5a5', borderRadius:6, fontSize:'0.75rem', cursor:'pointer', fontWeight:600 }}>
+                Delete
+              </button>
+            </>
+          )}
+          {canViewKanban && (
+            <button
+              onClick={() => onKanban(id)}
+              style={{ padding:'4px 10px', background:'#eff6ff', color:'#1d4ed8',
+                border:'1px solid #bfdbfe', borderRadius:6, fontSize:'0.75rem', cursor:'pointer', fontWeight:600 }}>
+              Kanban View
+            </button>
+          )}
+          {canViewKanban && (
+            <button
+              onClick={() => onSprintPlan(id)}
+              style={{ padding:'4px 10px', background:'#ecfeff', color:'#0e7490',
+                border:'1px solid #a5f3fc', borderRadius:6, fontSize:'0.75rem', cursor:'pointer', fontWeight:600 }}>
+              Sprint Plan
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -239,6 +260,8 @@ const Projects = () => {
                 role={currentRole}
                 onDelete={handleDelete}
                 onStatusChange={handleStatusChange}
+                onKanban={(projectId) => navigate(`/kanban/${projectId}`)}
+                onSprintPlan={(projectId) => navigate(`/sprint-planning/${projectId}`)}
                 onClick={() => id && navigate(`/projects/${id}`)}
               />
             );

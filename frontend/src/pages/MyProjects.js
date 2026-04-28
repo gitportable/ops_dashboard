@@ -4,6 +4,25 @@ import { getMyProjects } from "../api/projectApi";
 import { getProjectIssues } from "../api/issueApi";
 import IssueTableDeveloper from "../components/IssueTableDeveloper";
 import IssueTableTester from "../components/IssueTableTester";
+import api from "../api/axios";
+import toast from "react-hot-toast";
+
+/* ── Work Order constants (mirrors WorkOrders.js) ── */
+const WO_STAGES = ["Raw Material", "Cell", "Module", "Testing", "Dispatch"];
+const WO_STAGE_COLORS = {
+  "Raw Material": { bg: "#f3f4f6", color: "#4b5563", dot: "#9CA3AF" },
+  Cell:           { bg: "#dbeafe", color: "#1d4ed8", dot: "#3B82F6" },
+  Module:         { bg: "#ede9fe", color: "#6d28d9", dot: "#8B5CF6" },
+  Testing:        { bg: "#ffedd5", color: "#c2410c", dot: "#F97316" },
+  Dispatch:       { bg: "#dcfce7", color: "#16a34a", dot: "#22C55E" },
+};
+const WO_STATUS_COLORS = {
+  Open:          { bg: "#dbeafe", color: "#1d4ed8" },
+  "In Progress": { bg: "#fef3c7", color: "#b45309" },
+  Completed:     { bg: "#dcfce7", color: "#16a34a" },
+  "On Hold":     { bg: "#ffedd5", color: "#c2410c" },
+  Cancelled:     { bg: "#fee2e2", color: "#b91c1c" },
+};
 const pid = (p) =>
   p?.projectid ?? p?.project_id ?? p?.id ?? p?.ProjectID ?? p?.projectId;
 const pname = (p, id) =>
@@ -34,6 +53,11 @@ const MyProjects = () => {
   const [loadingIssues, setLoadingIssues]     = useState(false);
   const [projectError, setProjectError]       = useState(null);
   const [issueError, setIssueError]           = useState(null);
+  /* ── work orders ── */
+  const [workOrders, setWorkOrders]           = useState([]);
+  const [woLoading, setWoLoading]             = useState(false);
+  const [woOpen, setWoOpen]                   = useState(true);
+  const [advancingId, setAdvancingId]         = useState(null);
 
   useEffect(() => {
     setLoadingProjects(true);
@@ -74,9 +98,26 @@ const MyProjects = () => {
       .finally(() => setLoadingIssues(false));
   }, []);
 
+  /* ── work orders loader ── */
+  const loadWorkOrders = useCallback((project) => {
+    const id = pid(project);
+    if (id == null) return;
+    setWoLoading(true);
+    api.get(`/work-orders/project/${id}`)
+      .then((res) => {
+        const rows = Array.isArray(res.data) ? res.data : [];
+        setWorkOrders(rows);
+      })
+      .catch(() => setWorkOrders([]))
+      .finally(() => setWoLoading(false));
+  }, []);
+
   useEffect(() => {
-    if (selectedProject) loadIssues(selectedProject);
-  }, [selectedProject, loadIssues]);
+    if (selectedProject) {
+      loadIssues(selectedProject);
+      loadWorkOrders(selectedProject);
+    }
+  }, [selectedProject, loadIssues, loadWorkOrders]);
 
   const currentIssues = issues.filter(
     (i) => !["done", "closed", "verified"].includes((i.status || "").toLowerCase())
@@ -263,6 +304,180 @@ const MyProjects = () => {
                   </div>
                 )
               )}
+
+              {/* ── Work Orders collapsible section ────────────────── */}
+              <div style={{ marginTop: "1.25rem" }}>
+                {/* section header / toggle */}
+                <button
+                  onClick={() => setWoOpen((o) => !o)}
+                  style={{
+                    width: "100%", display: "flex", alignItems: "center",
+                    justifyContent: "space-between", padding: "10px 16px",
+                    background: "#1e3a8a", color: "#fff", border: "none",
+                    borderRadius: woOpen ? "12px 12px 0 0" : 12,
+                    fontWeight: 700, fontSize: "0.85rem", cursor: "pointer",
+                    transition: "border-radius 0.2s",
+                  }}
+                >
+                  <span>Work Orders ({workOrders.length})</span>
+                  <span style={{ fontSize: "0.75rem", opacity: 0.8 }}>
+                    {woOpen ? "▲ collapse" : "▼ expand"}
+                  </span>
+                </button>
+
+                {woOpen && (
+                  <div style={{
+                    background: "#fff", border: "1px solid #e5e7eb",
+                    borderTop: "none", borderRadius: "0 0 12px 12px",
+                    overflow: "hidden",
+                  }}>
+                    {woLoading && (
+                      <div style={{ padding: "1.25rem", color: "#6b7280", fontSize: "0.85rem" }}>
+                        Loading work orders…
+                      </div>
+                    )}
+
+                    {!woLoading && workOrders.length === 0 && (
+                      <div style={{
+                        padding: "1.5rem", textAlign: "center",
+                        color: "#9ca3af", fontSize: "0.82rem",
+                      }}>
+                        No work orders for this project.
+                      </div>
+                    )}
+
+                    {!woLoading && workOrders.map((wo) => {
+                      const stageIdx   = WO_STAGES.indexOf(wo.stage);
+                      const stageColor = WO_STAGE_COLORS[wo.stage] || WO_STAGE_COLORS["Raw Material"];
+                      const statusColor = WO_STATUS_COLORS[wo.status] || { bg: "#f3f4f6", color: "#4b5563" };
+                      const isLast     = wo.stage === "Dispatch";
+                      const nextStage  = !isLast ? WO_STAGES[stageIdx + 1] : null;
+                      const isAdvancing = advancingId === wo.id;
+
+                      return (
+                        <div
+                          key={wo.id}
+                          style={{
+                            padding: "12px 16px",
+                            borderBottom: "1px solid #f1f5f9",
+                            display: "grid",
+                            gridTemplateColumns: "auto 1fr auto auto",
+                            gap: "12px",
+                            alignItems: "center",
+                          }}
+                        >
+                          {/* WO Number + Batch */}
+                          <div>
+                            <div style={{ fontWeight: 700, color: "#1e3a8a", fontSize: "0.85rem" }}>
+                              {wo.wo_number || `WO-${wo.id}`}
+                            </div>
+                            <div style={{ fontSize: "0.72rem", color: "#94a3b8", marginTop: 2 }}>
+                              {wo.batch_lot ? `Batch: ${wo.batch_lot}` : "—"}
+                            </div>
+                          </div>
+
+                          {/* Stage pipeline */}
+                          <div>
+                            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                              {WO_STAGES.map((stage, idx) => {
+                                const done    = idx <= stageIdx;
+                                const current = idx === stageIdx;
+                                const sc      = WO_STAGE_COLORS[stage];
+                                return (
+                                  <div
+                                    key={stage}
+                                    style={{ display: "flex", alignItems: "center", gap: 4 }}
+                                    title={stage}
+                                  >
+                                    {/* dot */}
+                                    <div style={{
+                                      width:  current ? 10 : 8,
+                                      height: current ? 10 : 8,
+                                      borderRadius: "50%",
+                                      background: done ? sc.dot : "#e5e7eb",
+                                      boxShadow: current ? `0 0 0 2px ${sc.dot}44` : "none",
+                                      flexShrink: 0,
+                                      transition: "all 0.2s",
+                                    }} />
+                                    {/* connector line */}
+                                    {idx < WO_STAGES.length - 1 && (
+                                      <div style={{
+                                        width: 18,
+                                        height: 2,
+                                        background: idx < stageIdx ? "#1d4ed8" : "#e5e7eb",
+                                        borderRadius: 2,
+                                        flexShrink: 0,
+                                      }} />
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            {/* current stage label */}
+                            <div style={{ marginTop: 5 }}>
+                              <span style={{
+                                padding: "2px 8px", borderRadius: 99,
+                                fontSize: "0.68rem", fontWeight: 700,
+                                background: stageColor.bg, color: stageColor.color,
+                              }}>
+                                {wo.stage || "—"}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Status badge */}
+                          <span style={{
+                            padding: "3px 10px", borderRadius: 99,
+                            fontSize: "0.72rem", fontWeight: 700,
+                            background: statusColor.bg, color: statusColor.color,
+                            whiteSpace: "nowrap",
+                          }}>
+                            {wo.status || "—"}
+                          </span>
+
+                          {/* Advance Stage button */}
+                          {!isLast ? (
+                            <button
+                              disabled={isAdvancing}
+                              onClick={async () => {
+                                setAdvancingId(wo.id);
+                                try {
+                                  await api.put(`/work-orders/${wo.id}`, { stage: nextStage });
+                                  toast.success(`Moved to ${nextStage}`);
+                                  loadWorkOrders(selectedProject);
+                                } catch {
+                                  toast.error("Failed to advance stage");
+                                } finally {
+                                  setAdvancingId(null);
+                                }
+                              }}
+                              style={{
+                                padding: "4px 10px", borderRadius: 6, border: "none",
+                                background: isAdvancing ? "#e5e7eb" : "#1e3a8a",
+                                color: isAdvancing ? "#9ca3af" : "#fff",
+                                fontSize: "0.75rem", fontWeight: 700,
+                                cursor: isAdvancing ? "not-allowed" : "pointer",
+                                whiteSpace: "nowrap",
+                                transition: "background 0.15s",
+                              }}
+                            >
+                              {isAdvancing ? "…" : `→ ${nextStage}`}
+                            </button>
+                          ) : (
+                            <span style={{
+                              fontSize: "0.72rem", color: "#16a34a",
+                              fontWeight: 700, whiteSpace: "nowrap",
+                            }}>
+                              ✓ Complete
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              {/* ── end Work Orders section ── */}
             </>
           ) : (
             <div style={{

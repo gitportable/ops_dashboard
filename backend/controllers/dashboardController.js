@@ -308,37 +308,33 @@ exports.getBurndown = async (req, res) => {
 
 exports.getVelocityData = async (req, res) => {
   const { clause, params } = pf(req.query.projectId);
-  const { statusCol, dateCol } = await getSchema();
-
-  const closedFilter = statusCol ? ` AND ${isClosed(statusCol)}` : "";
-  const orderBy      = dateCol ? `MIN(${dateCol}) NULLS LAST` : `sprint`;
-
-  let rows = await sq(
+  const rows = await sq(
     `SELECT
        COALESCE(sprint,'No Sprint') AS sprint,
-       SUM(CASE WHEN assigneeteam='Frontend' THEN 1 ELSE 0 END) AS "Frontend",
-       SUM(CASE WHEN assigneeteam='Backend'  THEN 1 ELSE 0 END) AS "Backend",
-       SUM(CASE WHEN assigneeteam='QA'       THEN 1 ELSE 0 END) AS "QA",
-       SUM(CASE WHEN assigneeteam='DevOps'   THEN 1 ELSE 0 END) AS "DevOps"
-     FROM expanded_factissues WHERE 1=1${closedFilter}${clause}
-     GROUP BY sprint ORDER BY ${orderBy}`,
+       COALESCE(assigneeteam,'Unassigned') AS assigneeteam,
+       COUNT(*) FILTER (WHERE status = 'Done') AS done
+     FROM expanded_factissues
+     WHERE 1=1${clause}
+     GROUP BY sprint, assigneeteam
+     ORDER BY sprint`,
     params, "velocity"
   );
 
-  if (!rows.length) {
-    rows = await sq(
-      `SELECT
-         COALESCE(sprint,'No Sprint') AS sprint,
-         SUM(CASE WHEN assigneeteam='Frontend' THEN 1 ELSE 0 END) AS "Frontend",
-         SUM(CASE WHEN assigneeteam='Backend'  THEN 1 ELSE 0 END) AS "Backend",
-         SUM(CASE WHEN assigneeteam='QA'       THEN 1 ELSE 0 END) AS "QA",
-         SUM(CASE WHEN assigneeteam='DevOps'   THEN 1 ELSE 0 END) AS "DevOps"
-       FROM expanded_factissues WHERE 1=1${clause}
-       GROUP BY sprint ORDER BY ${orderBy}`,
-      params, "velocity-fb"
-    );
-  }
-  res.json(rows);
+  const grouped = rows.reduce((acc, row) => {
+    const sprint = row.sprint || "No Sprint";
+    if (!acc[sprint]) {
+      acc[sprint] = { sprint, Backend: 0, DevOps: 0, Frontend: 0, QA: 0 };
+    }
+    const teamRaw = String(row.assigneeteam || "").toLowerCase();
+    const done = parseInt(row.done, 10) || 0;
+    if (teamRaw === "backend") acc[sprint].Backend += done;
+    if (teamRaw === "devops") acc[sprint].DevOps += done;
+    if (teamRaw === "frontend") acc[sprint].Frontend += done;
+    if (teamRaw === "qa") acc[sprint].QA += done;
+    return acc;
+  }, {});
+
+  res.json(Object.values(grouped));
 };
 
 exports.getBudgetUtilization = async (req, res) => {
@@ -610,12 +606,77 @@ exports.getDashboardCharts = async (req, res) => {
   const { clause, params } = pf(req.query.projectId);
   const { statusCol } = await getSchema();
   const statusExpr = statusCol || "issuetype";
-  const [byStatus, byType, bySprint, byTeam] = await Promise.all([
+  const [byStatus, byType, bySprint, byTeam, stageRows, velocityRows, workloadRows] = await Promise.all([
     sq(`SELECT ${statusExpr} AS label, COUNT(*) AS count FROM expanded_factissues WHERE 1=1${clause} GROUP BY ${statusExpr} ORDER BY count DESC`, params, "cs"),
     sq(`SELECT COALESCE(issuetype,'Unknown') AS label, COUNT(*) AS count FROM expanded_factissues WHERE 1=1${clause} GROUP BY issuetype ORDER BY count DESC`, params, "ct"),
     sq(`SELECT COALESCE(sprint,'No Sprint') AS sprint, COUNT(*) AS count FROM expanded_factissues WHERE 1=1${clause} GROUP BY sprint ORDER BY count DESC LIMIT 15`, params, "csp"),
     sq(`SELECT COALESCE(assigneeteam,'Unassigned') AS assigneeteam, COUNT(*) AS count FROM expanded_factissues WHERE 1=1${clause} GROUP BY assigneeteam ORDER BY count DESC`, params, "ctm"),
+    sq(
+      `SELECT stage, COUNT(*) AS count
+       FROM expanded_factissues
+       WHERE stage IS NOT NULL${clause}
+       GROUP BY stage
+       ORDER BY stage`,
+      params,
+      "stageData"
+    ),
+    sq(
+      `SELECT COALESCE(sprint,'No Sprint') AS sprint, COALESCE(assigneeteam,'Unassigned') AS assigneeteam,
+              COUNT(*) FILTER (WHERE status = 'Done') AS done
+       FROM expanded_factissues
+       WHERE 1=1${clause}
+       GROUP BY sprint, assigneeteam`,
+      params,
+      "velocityData"
+    ),
+    sq(
+      `SELECT COALESCE(assigneeteam,'Unassigned') AS assigneeteam,
+              COUNT(*) FILTER (WHERE status='Open') AS open,
+              COUNT(*) FILTER (WHERE status='In Progress') AS in_progress
+       FROM expanded_factissues
+       WHERE 1=1${clause}
+       GROUP BY assigneeteam`,
+      params,
+      "workloadData"
+    ),
   ]);
-  res.json({ byStatus, byType, bySprint, byTeam, trend:[], ageDistrib:[], burndown:[], byDeveloper:[] });
+
+  const velocityGrouped = velocityRows.reduce((acc, row) => {
+    const sprint = row.sprint || "No Sprint";
+    if (!acc[sprint]) {
+      acc[sprint] = { sprint, Backend: 0, DevOps: 0, Frontend: 0, QA: 0 };
+    }
+    const teamRaw = String(row.assigneeteam || "").toLowerCase();
+    const done = parseInt(row.done, 10) || 0;
+    if (teamRaw === "backend") acc[sprint].Backend += done;
+    if (teamRaw === "devops") acc[sprint].DevOps += done;
+    if (teamRaw === "frontend") acc[sprint].Frontend += done;
+    if (teamRaw === "qa") acc[sprint].QA += done;
+    return acc;
+  }, {});
+
+  const stageData = stageRows.map((r) => ({
+    stage: r.stage,
+    count: parseInt(r.count, 10) || 0,
+  }));
+  const workloadData = workloadRows.map((r) => ({
+    assigneeteam: r.assigneeteam,
+    open: parseInt(r.open, 10) || 0,
+    in_progress: parseInt(r.in_progress, 10) || 0,
+  }));
+
+  res.json({
+    byStatus,
+    byType,
+    bySprint,
+    byTeam,
+    stageData,
+    velocityData: Object.values(velocityGrouped),
+    workloadData,
+    trend: [],
+    ageDistrib: [],
+    burndown: [],
+    byDeveloper: [],
+  });
 };
 

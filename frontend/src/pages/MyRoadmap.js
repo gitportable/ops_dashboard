@@ -1,4 +1,6 @@
 import React, { useContext, useState } from 'react';
+import api from '../api/axios';
+import { useQuery } from '@tanstack/react-query';
 import { AuthContext } from '../auth/AuthContext';
 import { useDashboardCharts } from "../api/dashboardApi";
 const ProgressBar = ({ value, color = '#3b82f6', showLabel = true }) => (
@@ -109,29 +111,52 @@ const SprintMilestone = ({ sprint, issues, index, role }) => {
   );
 };
 
-const GanttBar = ({ name, startOffset, duration, color, index }) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
-    <div style={{ width: 130, fontSize: '0.8rem', color: '#374151', fontWeight: 600, textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', flexShrink: 0 }}>
-      {name}
-    </div>
-    <div style={{ flex: 1, background: '#f1f5f9', borderRadius: 99, height: 22, position: 'relative', overflow: 'hidden' }}>
-      <div style={{
-        position: 'absolute', left: `${startOffset}%`, width: `${duration}%`,
-        height: '100%', background: color, borderRadius: 99,
-        display: 'flex', alignItems: 'center', paddingLeft: 8,
-        fontSize: '0.7rem', color: '#fff', fontWeight: 700,
-      }}>
-        {Math.round(duration)}%
-      </div>
-    </div>
-  </div>
-);
-
 const MyRoadmap = () => {
   const { role } = useContext(AuthContext);
   const currentRole = (role || '').toLowerCase();
-  const { data: charts, isLoading } = useDashboardCharts();
-  const [view, setView] = useState('timeline'); 
+  const { isLoading: chartsLoading } = useDashboardCharts();
+  const { data: myIssues = [], isLoading: issuesLoading } = useQuery({
+    queryKey: ['myTasks'],
+    queryFn: () => api.get('/issues/my-tasks').then(r => r.data)
+  });
+  const isLoading = chartsLoading || issuesLoading;
+  const [view, setView] = useState('timeline');
+  const isAdminLevel = role === 'admin' || role === 'superadmin';
+
+  const { data: ganttIssues = [] } = useQuery({
+    queryKey: ['roadmapIssues', role],
+    queryFn: () => isAdminLevel
+      ? api.get('/issues').then(r => r.data)
+      : api.get('/issues/my-tasks').then(r => r.data),
+    enabled: view === 'gantt'
+  });
+
+  const allSprints = [...new Set(ganttIssues
+    .map(i => i.sprint)
+    .filter(Boolean)
+  )].sort();
+
+  const allProjects = [...new Set(ganttIssues
+    .map(i => i.projectid)
+    .filter(Boolean)
+  )];
+
+  const ganttMatrix = allProjects.map(pid => {
+    const projectIssues = ganttIssues.filter(i => i.projectid === pid);
+    const projectName = projectIssues[0]?.projectname || pid;
+    const sprintMap = {};
+    allSprints.forEach(s => {
+      sprintMap[s] = projectIssues.filter(i => i.sprint === s);
+    });
+    return { pid, projectName, sprintMap };
+  });
+
+  const [ganttProjectFilter, setGanttProjectFilter] = useState('all');
+  const [expandedCell, setExpandedCell] = useState(null);
+
+  const filteredGanttMatrix = ganttProjectFilter === 'all'
+    ? ganttMatrix
+    : ganttMatrix.filter(r => r.pid === ganttProjectFilter);
 
   if (isLoading) return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '50vh', gap: 10 }}>
@@ -141,18 +166,17 @@ const MyRoadmap = () => {
     </div>
   );
 
-  const rawSprints = charts?.issuesPerSprint || [];
-  const budgetData = charts?.budgetData || [];
-
-  const sprintData = rawSprints.map((s, i) => ({
-    sprint: s.sprint,
-    count: s.count,
-    issues: Array.from({ length: s.count }, (_, j) => ({
-      issueid: `${i * 100 + j}`,
-      issuetype: j % 3 === 0 ? 'Bug' : 'Task',
-      status: j < Math.floor(s.count * 0.6) ? 'Done' : j < Math.floor(s.count * 0.8) ? 'In Progress' : 'Open',
-      description: `Sprint ${s.sprint} issue #${j + 1}`,
-    })),
+  // Group real issues assigned to this developer by sprint
+  const sprintMap = {};
+  myIssues.forEach(issue => {
+    const sprint = issue.sprint || 'No Sprint';
+    if (!sprintMap[sprint]) sprintMap[sprint] = [];
+    sprintMap[sprint].push(issue);
+  });
+  const sprintData = Object.entries(sprintMap).map(([sprint, issues]) => ({
+    sprint,
+    count: issues.length,
+    issues,
   }));
 
   const totalIssues    = sprintData.reduce((a, s) => a + s.count, 0);
@@ -162,13 +186,6 @@ const MyRoadmap = () => {
     ? Math.round(sprintData.reduce((a, s) => a + s.issues.filter(i => i.status === 'Done').length, 0) / totalIssues * 100)
     : 0;
 
-  const ganttData = budgetData.slice(0, 8).map((p, i) => ({
-    name: p.projectname,
-    startOffset: (i * 12) % 30,
-    duration: 20 + ((p.budgetallocated / 100000) * 10) % 40,
-    color: ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ef4444', '#06b6d4', '#ec4899', '#84cc16'][i % 8],
-  }));
-
   return (
     <div style={{ padding: '2rem', background: '#f8fafc', minHeight: '100vh', fontFamily: "'Inter', sans-serif" }}>
 
@@ -176,7 +193,7 @@ const MyRoadmap = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
           <span style={{ fontSize: '1.5rem' }}>🗺️</span>
           <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 800, color: '#111827' }}>
-            {currentRole === 'tester' ? 'QA Roadmap' : 'Sprint Roadmap'}
+            Planning Board
           </h1>
           <span style={{ padding: '3px 10px', borderRadius: 99, fontSize: '0.72rem', fontWeight: 700,
             background: currentRole === 'tester' ? '#f0fdf4' : '#eff6ff',
@@ -186,9 +203,7 @@ const MyRoadmap = () => {
           </span>
         </div>
         <p style={{ margin: 0, color: '#6b7280', fontSize: '0.87rem' }}>
-          {currentRole === 'tester'
-            ? 'Track which bugs need verification per sprint and your QA progress.'
-            : 'Visualize sprint progress, upcoming milestones, and project timelines.'}
+          Cross-project sprint execution, Gantt timeline, and delivery tracking
         </p>
       </div>
 
@@ -226,7 +241,7 @@ const MyRoadmap = () => {
           { id: 'summary',  label: '📋 Summary Table' },
         ].map(v => (
           <button key={v.id} onClick={() => setView(v.id)}
-            style={{ padding: '7px 16px', borderRadius: 8, fontSize: '0.83rem', fontWeight: 600, cursor: 'pointer', border: 'none', transition: 'all 0.15s',
+            style={{ padding: '7px 16px', borderRadius: 8, fontSize: '0.83rem', fontWeight: 600, cursor: 'pointer', transition: 'all 0.15s',
               background: view === v.id ? '#2563eb' : '#fff',
               color: view === v.id ? '#fff' : '#6b7280',
               boxShadow: view === v.id ? '0 4px 10px rgba(37,99,235,0.3)' : '0 1px 4px rgba(0,0,0,0.08)',
@@ -259,26 +274,144 @@ const MyRoadmap = () => {
 
       {view === 'gantt' && (
         <div style={{ background: '#fff', borderRadius: 14, padding: '1.5rem', border: '1px solid #e5e7eb', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
-          <h3 style={{ margin: '0 0 0.5rem', fontSize: '0.95rem', fontWeight: 700, color: '#374151' }}>Project Timeline Overview</h3>
-          <p style={{ margin: '0 0 1.5rem', fontSize: '0.8rem', color: '#9ca3af' }}>Relative duration and start offset per project based on budget allocation</p>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem' }}>
+            <div style={{ padding: '4px 12px', borderRadius: 99, fontSize: '0.8rem', fontWeight: 600, background: isAdminLevel ? '#eff6ff' : '#faf5ff', color: isAdminLevel ? '#1d4ed8' : '#7e22ce' }}>
+              Viewing: {isAdminLevel ? 'All Projects' : 'Your Assigned Projects'}
+            </div>
+            <select
+              value={ganttProjectFilter}
+              onChange={e => { setGanttProjectFilter(e.target.value); setExpandedCell(null); }}
+              style={{ padding: '4px 12px', borderRadius: 6, border: '1px solid #e5e7eb', fontSize: '0.85rem', outline: 'none' }}
+            >
+              <option value="all">All Projects</option>
+              {ganttMatrix.map(p => (
+                <option key={p.pid} value={p.pid}>{p.projectName}</option>
+              ))}
+            </select>
+          </div>
 
-          <div style={{ display: 'flex', gap: 8, marginBottom: '1.25rem', flexWrap: 'wrap' }}>
-            {ganttData.map(g => (
-              <div key={g.name} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <div style={{ width: 10, height: 10, borderRadius: 2, background: g.color }} />
-                <span style={{ fontSize: '0.75rem', color: '#6b7280' }}>{g.name}</span>
+          <div style={{ overflowX: 'auto', borderRadius: 12, border: '1px solid #e5e7eb', boxShadow: '0 2px 8px rgba(0,0,0,0.06)' }}>
+            <div style={{ display: 'flex' }}>
+              <div style={{ width: 200, flexShrink: 0, background: '#0f172a', color: 'white', padding: 12, fontSize: '0.78rem', fontWeight: 700 }}>
+                Project
+              </div>
+              {allSprints.map(s => (
+                <div key={s} style={{ width: 140, flexShrink: 0, background: '#1e3a8a', color: 'white', textAlign: 'center', padding: 12, fontSize: '0.78rem', fontWeight: 700, borderLeft: '1px solid #2d4a8a' }}>
+                  {s}
+                </div>
+              ))}
+            </div>
+
+            {ganttIssues.length === 0 ? (
+              <div style={{ textAlign: 'center', padding: '3rem', color: '#9ca3af' }}>
+                <div style={{ fontSize: '2.5rem', marginBottom: 8 }}>📋</div>
+                <p>No project data available.</p>
+              </div>
+            ) : (
+              <div>
+                {filteredGanttMatrix.map((row, i) => (
+                  <React.Fragment key={row.pid}>
+                    <div style={{ display: 'flex', background: i % 2 === 0 ? '#fff' : '#fafafa' }}>
+                      <div style={{ width: 200, flexShrink: 0, background: '#f8fafc', borderRight: '2px solid #e5e7eb', padding: '0 12px', display: 'flex', alignItems: 'center', fontWeight: 700, fontSize: '0.85rem', color: '#111827', height: 64 }}>
+                        {row.projectName}
+                      </div>
+                      {allSprints.map(s => {
+                        const cellIssues = row.sprintMap[s] || [];
+                        const hasIssues = cellIssues.length > 0;
+                        let content = null;
+                        
+                        if (hasIssues) {
+                          const done = cellIssues.filter(iss => (iss.status || '').toLowerCase() === 'done' || (iss.status || '').toLowerCase() === 'verified').length;
+                          const total = cellIssues.length;
+                          const pct = (done / total) * 100;
+                          const barColor = pct === 100 ? '#16a34a' : pct > 60 ? '#2563eb' : pct > 30 ? '#d97706' : '#dc2626';
+                          
+                          content = (
+                            <>
+                              <div style={{ height: 24, borderRadius: 6, width: '90%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '0.72rem', fontWeight: 700, background: barColor }}>
+                                {done}/{total}
+                              </div>
+                              <div style={{ height: 4, background: '#e5e7eb', borderRadius: 99, width: '90%', marginTop: 4 }}>
+                                <div style={{ width: `${pct}%`, height: '100%', background: barColor, borderRadius: 99 }} />
+                              </div>
+                            </>
+                          );
+                        } else {
+                          content = <span style={{ color: '#d1d5db', fontSize: '0.85rem' }}>—</span>;
+                        }
+
+                        return (
+                          <div 
+                            key={s} 
+                            onClick={() => { if(hasIssues) setExpandedCell(expandedCell === `${row.pid}-${s}` ? null : `${row.pid}-${s}`); }}
+                            style={{ width: 140, flexShrink: 0, height: 64, border: '1px solid #f1f5f9', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 6, cursor: hasIssues ? 'pointer' : 'default' }}
+                          >
+                            {content}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    
+                    {allSprints.some(s => expandedCell === `${row.pid}-${s}`) && (
+                      (() => {
+                        const expandedSprint = allSprints.find(s => expandedCell === `${row.pid}-${s}`);
+                        const issues = row.sprintMap[expandedSprint] || [];
+                        return (
+                          <div style={{ background: '#eff6ff', borderLeft: '3px solid #2563eb', padding: '1rem', borderRadius: '0 0 8px 8px', marginLeft: 200 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+                              <strong style={{ color: '#1e3a8a', fontSize: '0.9rem' }}>{expandedSprint} Details</strong>
+                              <button onClick={() => setExpandedCell(null)} style={{ border: 'none', background: 'transparent', cursor: 'pointer', fontSize: '1.2rem', color: '#6b7280' }}>×</button>
+                            </div>
+                            {issues.length === 0 ? (
+                              <div style={{ color: '#6b7280', fontSize: '0.85rem' }}>No issues for this sprint</div>
+                            ) : (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                                {issues.map(iss => {
+                                  const typeLower = (iss.issuetype || '').toLowerCase();
+                                  const typeBg = typeLower === 'bug' ? '#ef4444' : typeLower === 'task' ? '#3b82f6' : typeLower === 'story' ? '#10b981' : '#6b7280';
+                                  const statusDone = (iss.status || '').toLowerCase() === 'done';
+                                  const statusBg = statusDone ? '#16a34a' : '#6b7280';
+                                  
+                                  return (
+                                    <div key={iss.issueid || iss.issue_id} style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: '0.8rem', background: '#fff', padding: '6px 12px', borderRadius: 6, border: '1px solid #bfdbfe' }}>
+                                      <span style={{ color: '#94a3b8', width: 40 }}>#{iss.issueid || iss.issue_id}</span>
+                                      <span style={{ background: typeBg, color: 'white', borderRadius: 99, padding: '2px 8px', fontSize: '0.72rem', fontWeight: 600 }}>{iss.issuetype || 'Issue'}</span>
+                                      <span style={{ flex: 1, color: '#334155', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                        {iss.description ? (iss.description.length > 50 ? iss.description.substring(0,50)+'...' : iss.description) : 'No description'}
+                                      </span>
+                                      <span style={{ background: statusBg, color: 'white', borderRadius: 99, padding: '2px 8px', fontSize: '0.72rem', fontWeight: 600 }}>{iss.status || 'Open'}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()
+                    )}
+                  </React.Fragment>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', gap: 16, marginTop: '1rem', flexWrap: 'wrap' }}>
+            {[
+              { color: '#16a34a', label: 'Completed' },
+              { color: '#2563eb', label: 'On Track' },
+              { color: '#d97706', label: 'At Risk' },
+              { color: '#dc2626', label: 'Behind' },
+            ].map(lg => (
+              <div key={lg.color} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: 12, height: 12, background: lg.color, borderRadius: 2 }} />
+                <span style={{ fontSize: '0.78rem', color: '#6b7280' }}>{lg.label}</span>
               </div>
             ))}
           </div>
+          <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginTop: 8 }}>
+            Bar color reflects sprint completion rate · Click any cell to see issues
+          </div>
 
-          <div style={{ padding: '0.5rem 0' }}>
-            {ganttData.map((g, i) => <GanttBar key={i} {...g} index={i} />)}
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', paddingLeft: 142, marginTop: 8 }}>
-            {['Q1', 'Q2', 'Q3', 'Q4'].map(q => (
-              <span key={q} style={{ fontSize: '0.72rem', color: '#9ca3af', fontWeight: 600 }}>{q}</span>
-            ))}
-          </div>
         </div>
       )}
 

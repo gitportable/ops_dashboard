@@ -60,15 +60,15 @@ exports.getMyProjects = async (req, res) => {
         COALESCE(p.budgetused, 0)::float      as budget_used,
         p.startdate,
         p.enddate,
-        pa.role_in_project as member_role,
-        pa.assigned_at,
+        pa.role as member_role,
+        pa.created_at,
         COUNT(DISTINCT i.issueid) as issuecount
       FROM expanded_factprojects p
       JOIN project_assignments pa ON p.projectid::text = pa.project_id::text AND pa.user_id = $1
       LEFT JOIN expanded_factissues i ON i.projectid::text = p.projectid::text
       GROUP BY p.projectid, p.projectname, p.status,
                p.budgetallocated, p.budgetused, p.startdate, p.enddate,
-               pa.role_in_project, pa.assigned_at
+               pa.role, pa.created_at
       ORDER BY p.projectname`,
       [userId]
     );
@@ -103,13 +103,18 @@ exports.getProject = async (req, res) => {
         p.*,
         p.projectid   as project_id,
         p.projectname as name,
-        COUNT(DISTINCT pa.user_id) as membercount,
-        COUNT(DISTINCT i.issueid)  as issuecount
+        (
+          SELECT COUNT(DISTINCT pa.user_id)
+          FROM project_assignments pa
+          WHERE pa.project_id::text = p.projectid::text
+        ) as membercount,
+        (
+          SELECT COUNT(DISTINCT i.issueid)
+          FROM expanded_factissues i
+          WHERE i.projectid::text = p.projectid::text
+        ) as issuecount
       FROM expanded_factprojects p
-      LEFT JOIN project_assignments pa ON pa.project_id::text = p.projectid::text
-      LEFT JOIN expanded_factissues i   ON i.projectid::text  = p.projectid::text
-      WHERE p.projectid::text = $1
-      GROUP BY p.projectid`,
+      WHERE p.projectid::text = $1`,
       [projectId]
     );
 

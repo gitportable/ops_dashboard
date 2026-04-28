@@ -3,6 +3,7 @@ import { createContext, useState, useEffect } from "react";
 export const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
+  const [loading, setLoading] = useState(true);
   const [role, setRole] = useState(() => {
     const saved = localStorage.getItem("role");
     return saved ? saved.toLowerCase() : null;
@@ -11,7 +12,9 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(() => {
     try {
       const saved = localStorage.getItem("user");
-      return saved ? JSON.parse(saved) : null;
+      if (saved) return JSON.parse(saved);
+      const savedRole = localStorage.getItem("role");
+      return savedRole ? { role: savedRole.toLowerCase() } : null;
     } catch {
       return null;
     }
@@ -38,12 +41,17 @@ export const AuthProvider = ({ children }) => {
   };
 
   useEffect(() => {
+    setLoading(false);
     const handleStorage = () => {
       const savedRole = localStorage.getItem("role");
       setRole(savedRole ? savedRole.toLowerCase() : null);
       try {
         const savedUser = localStorage.getItem("user");
-        setUser(savedUser ? JSON.parse(savedUser) : null);
+        if (savedUser) {
+          setUser(JSON.parse(savedUser));
+        } else {
+          setUser(savedRole ? { role: savedRole.toLowerCase() } : null);
+        }
       } catch {
         setUser(null);
       }
@@ -53,7 +61,7 @@ export const AuthProvider = ({ children }) => {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ role, user, login, logout }}>
+    <AuthContext.Provider value={{ role, user, loading, login, logout }}>
       {children}
     </AuthContext.Provider>
   );

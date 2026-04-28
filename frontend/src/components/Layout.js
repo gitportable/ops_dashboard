@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import Sidebar from './Sidebar';
+import Sidebar from './SideBar';
 
 const Layout = ({ children }) => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);

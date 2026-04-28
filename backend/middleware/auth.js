@@ -1,3 +1,6 @@
+const jwt = require('jsonwebtoken');
+
+
 module.exports = (req, res, next) => {
   const authHeader = req.headers.authorization;
   
@@ -32,3 +35,5 @@ module.exports = (req, res, next) => {
     return res.status(403).json({ message: "Invalid token" });
   }
 };
+
+

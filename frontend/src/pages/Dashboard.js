@@ -1,23 +1,25 @@
-import { useContext, useState } from 'react';
+import { useContext, useMemo, useState } from 'react';
 import { AuthContext } from '../auth/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
-  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
+  BarChart, Bar, Line, PieChart, Pie, Cell,
   AreaChart, Area, ComposedChart, RadarChart, Radar, PolarGrid, PolarAngleAxis,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
-  RadialBarChart, RadialBar,
 } from 'recharts';
+import * as issueApi from '../api/issueApi';
+import api from '../api/axios';
 import {
-  useDashboardStats, useByStatus, useByType, useBySprint, useByTeam,
-  useTrend, useAgeDistribution, useBurndown, useVelocityData,
+  useDashboardStats, useByType, useBySprint,
+  useAgeDistribution, useBurndown, useVelocityData,
   useBudgetUtilization, useResolutionTime, useProjectHealth,
   useOverdueIssues, useSLACompliance, useCumulativeTrend,
   useProjectList, useRoleOverview,
 } from '../api/dashboardApi';
+import { getTriggeredAlerts } from '../api/inventoryAlertApi';
 import { FiAlertCircle, FiCheckSquare, FiBriefcase, FiUsers, FiClock, FiList, FiActivity } from 'react-icons/fi';
 
 const P = ['#2563eb','#7c3aed','#0891b2','#16a34a','#dc2626','#ea580c','#0d9488','#9333ea','#ca8a04','#be185d'];
-const STATUS_CLR = { open:'#2563eb','in progress':'#7c3aed','in review':'#0891b2',blocked:'#dc2626',done:'#16a34a',verified:'#0d9488','needs info':'#ea580c',closed:'#94a3b8' };
 const sdot = s => ({'active':'#16a34a','in progress':'#2563eb',completed:'#7c3aed','on hold':'#ca8a04',blocked:'#dc2626',planning:'#94a3b8','cancelled':'#dc2626'}[(s||'').toLowerCase()]||'#94a3b8');
 
 const Tip = ({ active, payload, label }) => {
@@ -284,13 +286,26 @@ const Dashboard = () => {
   const isDev   = currentRole === 'developer';
   const isTst   = currentRole === 'tester';
   const [pid, setPid] = useState(null);
+  const [statusFilter, setStatusFilter] = useState(null);
+  const [teamFilter, setTeamFilter]     = useState(null);
+  const [activeFilter, setActiveFilter] = useState(null);
+  const [dismissedAlert, setDismissedAlert] = useState(false);
+
+  const { data: triggeredAlerts = [] } = useQuery({
+    queryKey: ['triggeredAlerts'],
+    queryFn: getTriggeredAlerts,
+    refetchInterval: 300000, // refresh every 5 minutes
+    staleTime: 5 * 60 * 1000,
+    cacheTime: 10 * 60 * 1000,
+    keepPreviousData: true,
+    refetchOnWindowFocus: false,
+  });
+
+  const clearFilter = () => { setStatusFilter(null); setTeamFilter(null); setActiveFilter(null); };
 
   const stats   = useDashboardStats(pid);
-  const byStatus= useByStatus(pid);
   const byType  = useByType(pid);
   const bySprint= useBySprint(pid);
-  const byTeam  = useByTeam(pid);
-  const trend   = useTrend(pid);
   const age     = useAgeDistribution(pid);
   const burndown= useBurndown(pid);
   const velocity= useVelocityData(pid);
@@ -301,9 +316,123 @@ const Dashboard = () => {
   const sla     = useSLACompliance(pid);
   const cumul   = useCumulativeTrend(pid);
 
+  const { data: vendorsRaw = [] } = useQuery({
+    queryKey: ['dash-vendors'],
+    queryFn: () => api.get('/vendors').then(r => Array.isArray(r.data) ? r.data : []),
+    staleTime: 5 * 60 * 1000,
+    cacheTime: 10 * 60 * 1000,
+    keepPreviousData: true,
+    refetchOnWindowFocus: false,
+  });
+  const { data: posRaw = [] } = useQuery({
+    queryKey: ['dash-pos'],
+    queryFn: () => api.get('/vendors/purchase-orders').then(r => Array.isArray(r.data) ? r.data : []),
+    staleTime: 5 * 60 * 1000,
+    cacheTime: 10 * 60 * 1000,
+    keepPreviousData: true,
+    refetchOnWindowFocus: false,
+  });
+
+  const { data: issuesRaw, isLoading: issuesLoading } = useQuery({
+    queryKey: ['dashboard-issues', pid ?? 'all'],
+    queryFn: async () => {
+      const res = await issueApi.getIssues();
+      const rows = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+      if (!pid) return rows;
+      return rows.filter((i) => String(i?.projectid || i?.project_id || '').trim() === String(pid).trim());
+    },
+    staleTime: 5 * 60 * 1000,
+    cacheTime: 10 * 60 * 1000,
+    keepPreviousData: true,
+    refetchOnWindowFocus: false,
+  });
+
   const d = h => Array.isArray(h.data) ? h.data : [];
   const L = h => h.isLoading;
   const s = stats.data || {};
+  const issues = useMemo(() => (Array.isArray(issuesRaw) ? issuesRaw : []), [issuesRaw]);
+
+  const displayedIssues = useMemo(() => {
+    if (!statusFilter && !teamFilter) return null;
+    return issues.filter(i =>
+      (!statusFilter || i.status === statusFilter) &&
+      (!teamFilter   || (i.assigneeteam||'') === teamFilter)
+    );
+  }, [issues, statusFilter, teamFilter]);
+
+  const vendorPoMap = useMemo(() => {
+    const map = {};
+    posRaw.forEach(po => {
+      const name = po.vendor_name || po.name || 'Unknown';
+      map[name] = (map[name] || 0) + 1;
+    });
+    return Object.entries(map)
+      .sort((a,b) => b[1]-a[1]).slice(0,5)
+      .map(([name, count]) => ({ name, count }));
+  }, [posRaw]);
+
+  const totalPoValue = useMemo(() =>
+    posRaw.reduce((acc, po) => acc + Number(po.total_value || po.amount || 0), 0)
+  , [posRaw]);
+
+  const statusData = useMemo(() => {
+    const map = {};
+    (issues || []).forEach((issue) => {
+      const st = issue?.status || 'Unknown';
+      map[st] = (map[st] || 0) + 1;
+    });
+    return Object.entries(map).map(([name, value]) => ({ name, value }));
+  }, [issues]);
+
+  const STATUS_COLORS = {
+    Open: '#3b82f6',
+    'In Progress': '#f59e0b',
+    Done: '#22c55e',
+    Blocked: '#ef4444',
+    Verified: '#8b5cf6',
+    Testing: '#06b6d4',
+    Escalated: '#f97316',
+    'Needs Info': '#6b7280',
+    Unknown: '#9ca3af',
+  };
+
+  const teamEfficiency = useMemo(() => {
+    const map = {};
+    (issues || []).forEach((i) => {
+      const t = (i?.assigneeteam || 'Unassigned').trim();
+      if (!map[t]) map[t] = { total: 0, done: 0 };
+      map[t].total += 1;
+      if (['Done', 'Verified', 'Closed'].includes(i?.status)) map[t].done += 1;
+    });
+    return Object.entries(map)
+      .map(([team, data]) => ({
+        team,
+        efficiency: data.total ? Math.round((data.done / data.total) * 100) : 0,
+        ...data,
+      }))
+      .sort((a, b) => b.efficiency - a.efficiency)
+      .slice(0, 4);
+  }, [issues]);
+
+  const recentIssues = useMemo(
+    () =>
+      [...(issues || [])]
+        .sort((a, b) => new Date(b?.createddate) - new Date(a?.createddate))
+        .slice(0, 8),
+    [issues]
+  );
+  const velocityChartData = useMemo(
+    () =>
+      d(velocity).map((row) => ({
+        sprint: row.sprint,
+        Backend: Number(row.Backend) || 0,
+        DevOps: Number(row.DevOps) || 0,
+        Frontend: Number(row.Frontend) || 0,
+        QA: Number(row.QA) || 0,
+      })),
+    [velocity]
+  );
+  console.log("velocityData", velocityChartData);
 
   const pageTitle = isSA ? 'SuperAdmin Dashboard' : isAdmin ? 'Admin Dashboard' : isDev ? 'My Workboard' : 'QA Dashboard';
 
@@ -339,6 +468,23 @@ const Dashboard = () => {
             <p style={{ color:'#6b7280', fontSize:'0.82rem', margin:'3px 0 0' }}>Live data · real-time on issue updates</p>
           </div>
 
+          {activeFilter && (
+            <div style={{ display:'flex', alignItems:'center', gap:10, background:'#eff6ff', border:'1px solid #bfdbfe', borderRadius:8, padding:'8px 14px', marginBottom:'1rem' }}>
+              <span style={{ color:'#1e3a8a', fontSize:'0.82rem', fontWeight:600 }}>Active filter: {activeFilter}</span>
+              <button onClick={clearFilter} style={{ marginLeft:'auto', background:'transparent', border:'none', color:'#1e3a8a', cursor:'pointer', fontSize:'1rem', lineHeight:1, padding:0 }}>×</button>
+            </div>
+          )}
+
+          {triggeredAlerts.length > 0 && !dismissedAlert && (
+            <div style={{ background: '#fff7ed', border: '1px solid #fed7aa', borderRadius: 10, padding: '12px 16px', marginBottom: '1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <div style={{ color: '#c2410c', fontSize: '0.85rem' }}>
+                ⚠️ {triggeredAlerts.length} inventory item(s) below threshold: <strong>{triggeredAlerts.map(a => a.material_type).join(', ')}</strong>
+                <button onClick={() => navigate('/inventory-alerts')} style={{ marginLeft: 12, background: 'none', border: 'none', color: '#ea580c', fontWeight: 600, cursor: 'pointer', padding: 0 }}>View Details</button>
+              </div>
+              <button onClick={() => setDismissedAlert(true)} style={{ background: 'none', border: 'none', color: '#f97316', cursor: 'pointer', fontSize: '1.2rem', lineHeight: 1 }}>×</button>
+            </div>
+          )}
+
           
           <div style={{ display:'flex', gap:10, flexWrap:'wrap', marginBottom:'1.25rem' }}>
             {L(stats)
@@ -351,19 +497,42 @@ const Dashboard = () => {
           <div style={{ display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(340px,1fr))', gap:'0.9rem' }}>
 
            
-            <Card title="Issues by Status" sub="Current breakdown by status">
-              {W(L(byStatus), d(byStatus),
-                <ResponsiveContainer width="100%" height={200}>
-                  <PieChart>
-                    <Pie data={d(byStatus)} dataKey="count" nameKey="label" cx="50%" cy="50%"
-                      outerRadius={82} innerRadius={42}
-                      label={({ label, percent }) => percent>0.04 ? `${label} ${Math.round(percent*100)}%` : ''}
-                      labelLine={false}>
-                      {d(byStatus).map((e,i) => <Cell key={i} fill={STATUS_CLR[(e.label||'').toLowerCase()]||P[i%P.length]} />)}
-                    </Pie>
-                    <Tooltip content={<Tip />} />
-                  </PieChart>
-                </ResponsiveContainer>
+            <Card title="Issues by Status" sub="Click a slice to filter issues below">
+              {issuesLoading ? <Skel h={220} /> : statusData.length === 0 ? <Empty h={220} /> : (
+                <>
+                  <ResponsiveContainer width="100%" height={320}>
+                    <PieChart margin={{ top: 10, bottom: 10 }}>
+                      <Pie
+                        data={statusData}
+                        cx="50%" cy="50%"
+                        outerRadius={90} innerRadius={40}
+                        dataKey="value" paddingAngle={2}
+                        cursor="pointer"
+                        onClick={(entry) => {
+                          setStatusFilter(entry.name);
+                          setTeamFilter(null);
+                          setActiveFilter(`Status: ${entry.name}`);
+                        }}
+                      >
+                        {statusData.map((entry, index) => (
+                          <Cell key={index} fill={STATUS_COLORS[entry.name] || '#9ca3af'}
+                            opacity={statusFilter && statusFilter !== entry.name ? 0.4 : 1} />
+                        ))}
+                      </Pie>
+                      <Tooltip formatter={(value, name) => {
+                        const total = statusData.reduce((a,b) => a + b.value, 0);
+                        const pct = total ? Math.round((value/total)*100) : 0;
+                        return [`${value} issues (${pct}%)`, name];
+                      }} />
+                      <Legend iconType="circle" wrapperStyle={{ fontSize:'0.75rem' }} verticalAlign="bottom" height={36} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                  {displayedIssues && (
+                    <div style={{ marginTop:8, background:'#f8fafc', borderRadius:8, padding:'8px 10px', fontSize:'0.78rem', color:'#374151' }}>
+                      <strong>{displayedIssues.length}</strong> issues with status <strong>{statusFilter}</strong>
+                    </div>
+                  )}
+                </>
               )}
             </Card>
 
@@ -383,60 +552,88 @@ const Dashboard = () => {
               )}
             </Card>
 
-            <Card title="Issues per Sprint" sub="Volume across sprints" cols={2}>
+            <Card title="Issues per Sprint" sub="Click a bar to filter by sprint" cols={2}>
               {W(L(bySprint), d(bySprint),
-                <ResponsiveContainer width="100%" height={220}>
-                  <BarChart data={d(bySprint)} margin={{ left:-10 }}>
+                <ResponsiveContainer width="100%" height={280}>
+                  <BarChart data={d(bySprint)} margin={{ left:-10 }}
+                    onClick={(data) => {
+                      if (data?.activePayload?.[0]) {
+                        const sprint = data.activePayload[0].payload.sprint;
+                        navigate('/issues', { state: { sprintFilter: sprint } });
+                      }
+                    }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                     <XAxis dataKey="sprint" tick={{ fontSize:11 }} />
                     <YAxis tick={{ fontSize:11 }} />
                     <Tooltip content={<Tip />} />
-                    <Bar dataKey="count" name="Issues" radius={[5,5,0,0]}>
+                    <Bar dataKey="count" name="Issues" radius={[5,5,0,0]} cursor="pointer">
                       {d(bySprint).map((_,i) => <Cell key={i} fill={P[i%P.length]} />)}
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
-              , 220)}
+              , 280)}
             </Card>
 
            
-            <Card title="Issues by Team" sub="Workload distribution">
-              {W(L(byTeam), d(byTeam),
-                <ResponsiveContainer width="100%" height={200}>
-                  <RadialBarChart cx="50%" cy="50%" innerRadius={20} outerRadius={90} startAngle={180} endAngle={-180}
-                    data={d(byTeam).map((r,i) => ({ ...r, fill:P[i%P.length], name: r.team||r.label||'?' }))}>
-                    <RadialBar minAngle={10} background dataKey="count" />
-                    <Tooltip content={<Tip />} />
-                    <Legend iconSize={10} wrapperStyle={{ fontSize:10 }} />
-                  </RadialBarChart>
-                </ResponsiveContainer>
+            <Card title="Top Performing Teams" sub="Done rate by assignee team">
+              {issuesLoading ? <Skel h={200} /> : teamEfficiency.length === 0 ? <Empty h={200} /> : (
+                <div style={{ display: 'grid', gap: 10 }}>
+                  {teamEfficiency.map((t, idx) => {
+                    const rankBg = [null,'#f59e0b','#9ca3af','#cd7f32'][idx+1] || '#e5e7eb';
+                    const rankColor = idx < 3 ? '#fff' : '#374151';
+                    return (
+                      <div key={t.team} style={{ borderBottom: '1px solid #f1f5f9', paddingBottom: 8 }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ width:20, height:20, borderRadius:'50%', background:rankBg, color:rankColor, fontSize:'0.7rem', fontWeight:800, display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0 }}>
+                            {idx+1}
+                          </span>
+                          <span style={{ fontWeight: 700, color: '#1e293b', fontSize: '0.85rem' }}>{t.team}</span>
+                          <span style={{ marginLeft: 'auto', fontWeight: 700, color: '#16a34a', fontSize: '0.8rem' }}>{t.efficiency}%</span>
+                        </div>
+                        <div style={{ marginTop: 6, background: '#e5e7eb', borderRadius: 3, height: 6, overflow: 'hidden' }}>
+                          <div style={{ width: `${t.efficiency}%`, background: '#22c55e', height: 6, borderRadius: 3 }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </Card>
 
           
-            <Card title="Open vs Closed Trend" sub="Issue status over time">
-              {W(L(trend), d(trend),
-                <ResponsiveContainer width="100%" height={200}>
-                  <AreaChart data={d(trend)} margin={{ left:-10 }}>
-                    <defs>
-                      <linearGradient id="gO" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#ef4444" stopOpacity={0.2}/><stop offset="95%" stopColor="#ef4444" stopOpacity={0}/></linearGradient>
-                      <linearGradient id="gC" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#16a34a" stopOpacity={0.2}/><stop offset="95%" stopColor="#16a34a" stopOpacity={0}/></linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                    <XAxis dataKey="date" tick={{ fontSize:10 }} />
-                    <YAxis tick={{ fontSize:11 }} />
-                    <Tooltip content={<Tip />} /><Legend />
-                    <Area type="monotone" dataKey="open"   stroke="#ef4444" strokeWidth={2} fill="url(#gO)" name="Open" />
-                    <Area type="monotone" dataKey="closed" stroke="#16a34a" strokeWidth={2} fill="url(#gC)" name="Closed" />
-                  </AreaChart>
-                </ResponsiveContainer>
+            <Card title="Recent Issues Activity" sub="Latest issue updates">
+              {issuesLoading ? <Skel h={220} /> : recentIssues.length === 0 ? <Empty h={220} /> : (
+                <div style={{ maxHeight: 220, overflowY: 'auto' }}>
+                  {recentIssues.map((i, idx) => {
+                    const typeKey = (i?.issuetype || '').toLowerCase();
+                    const statusKey = (i?.status || 'Unknown').toLowerCase();
+                    const typeColors =
+                      typeKey === 'bug' ? '#fee2e2'
+                        : typeKey === 'task' ? '#dbeafe'
+                          : typeKey === 'story' ? '#ede9fe'
+                            : '#f3f4f6';
+                    const statusBg =
+                      statusKey === 'done' || statusKey === 'verified' || statusKey === 'closed' ? '#dcfce7'
+                        : statusKey === 'blocked' ? '#fee2e2'
+                          : statusKey === 'in progress' ? '#fef3c7'
+                            : '#e5e7eb';
+                    return (
+                      <div key={i?.issueid || idx} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f1f5f9' }}>
+                        <span style={{ fontWeight: 700, color: '#1e3a8a', fontSize: '0.8rem' }}>{i?.issueid || '—'}</span>
+                        <span style={{ padding: '2px 6px', borderRadius: 4, background: typeColors, fontSize: '0.7rem' }}>{i?.issuetype || 'Unknown'}</span>
+                        <span style={{ padding: '2px 6px', borderRadius: 4, background: statusBg, fontSize: '0.7rem' }}>{i?.status || 'Unknown'}</span>
+                        <span style={{ color: '#6b7280', fontSize: '0.75rem', marginLeft: 'auto' }}>{i?.assigneeteam || 'Unassigned'}</span>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </Card>
 
             {/* 6. Sprint Progress — COMPOSED */}
-            <Card title="Sprint Progress" sub="Done vs remaining per sprint">
+            <Card title="Sprint Progress" sub="Done vs remaining per sprint" cols={2}>
               {W(L(burndown), d(burndown),
-                <ResponsiveContainer width="100%" height={200}>
+                <ResponsiveContainer width="100%" height={280}>
                   <ComposedChart data={d(burndown)} margin={{ left:-10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                     <XAxis dataKey="sprint" tick={{ fontSize:10 }} />
@@ -452,16 +649,23 @@ const Dashboard = () => {
 
           
             {isAdmin && (
-              <Card title="Team Velocity" sub="Issues closed per sprint by team" cols={2}>
-                {W(L(velocity), d(velocity),
+              <Card title="Team Velocity" sub="Click a bar to filter issues by team" cols={2}>
+                {W(L(velocity), velocityChartData,
                   <ResponsiveContainer width="100%" height={220}>
-                    <BarChart data={d(velocity)} margin={{ left:-10 }}>
+                    <BarChart data={velocityChartData} margin={{ left:-10 }}
+                      onClick={(data) => {
+                        if (data?.activeLabel) {
+                          setStatusFilter(null);
+                          setTeamFilter(data.activeLabel);
+                          setActiveFilter(`Sprint: ${data.activeLabel}`);
+                        }
+                      }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                       <XAxis dataKey="sprint" tick={{ fontSize:11 }} />
                       <YAxis tick={{ fontSize:11 }} />
                       <Tooltip content={<Tip />} /><Legend />
                       {['Frontend','Backend','QA','DevOps'].map((t,i) => (
-                        <Bar key={t} dataKey={t} stackId="v" fill={P[i]} radius={i===3?[4,4,0,0]:undefined} />
+                        <Bar key={t} dataKey={t} stackId="v" fill={P[i]} radius={i===3?[4,4,0,0]:undefined} cursor="pointer" />
                       ))}
                     </BarChart>
                   </ResponsiveContainer>
@@ -471,17 +675,22 @@ const Dashboard = () => {
 
           
             {isAdmin && (
-              <Card title="Budget Utilization" sub="Allocated vs used per project" cols={2}>
+              <Card title="Budget Utilization" sub="Click a bar to open project" cols={2}>
                 {W(L(budget), d(budget),
                   <ResponsiveContainer width="100%" height={220}>
-                    <BarChart data={d(budget)} margin={{ left:5 }}>
+                    <BarChart data={d(budget)} margin={{ left:5 }}
+                      onClick={(data) => {
+                        const pid2 = data?.activePayload?.[0]?.payload?.projectid || data?.activePayload?.[0]?.payload?.project_id;
+                        if (pid2) navigate(`/projects/${pid2}`);
+                        else navigate('/projects');
+                      }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
                       <XAxis dataKey="name" tick={{ fontSize:10 }} />
                       <YAxis tickFormatter={v=>`$${(v/1000).toFixed(0)}k`} tick={{ fontSize:11 }} />
                       <Tooltip formatter={v=>[`$${Number(v).toLocaleString()}`,'']} />
                       <Legend />
-                      <Bar dataKey="budget_total" name="Allocated" fill="#bfdbfe" radius={[4,4,0,0]} />
-                      <Bar dataKey="budget_used"  name="Used"      fill="#2563eb" radius={[4,4,0,0]} />
+                      <Bar dataKey="budget_total" name="Allocated" fill="#bfdbfe" radius={[4,4,0,0]} cursor="pointer" />
+                      <Bar dataKey="budget_used"  name="Used"      fill="#2563eb" radius={[4,4,0,0]} cursor="pointer" />
                     </BarChart>
                   </ResponsiveContainer>
                 , 220)}
@@ -525,9 +734,10 @@ const Dashboard = () => {
 
          
             {isAdmin && (
-              <Card title="Project Health Overview" sub="% resolved per project">
+              <Card title="Project Health Overview" sub="Click to open projects page">
                 {W(L(health), d(health),
-                  <ResponsiveContainer width="100%" height={200}>
+                  <ResponsiveContainer width="100%" height={200} style={{ cursor:'pointer' }}
+                    onClick={() => navigate('/projects')}>
                     <RadarChart data={d(health)} cx="50%" cy="50%" outerRadius={75}>
                       <PolarGrid stroke="#e5e7eb" />
                       <PolarAngleAxis dataKey="name" tick={{ fontSize:9 }} />
@@ -539,22 +749,54 @@ const Dashboard = () => {
               </Card>
             )}
 
-            
             {isAdmin && (
-              <Card title="Open Issues per Project" sub="Current open count by project">
+              <Card title="Open Issues per Project" sub="Click a bar to open project">
                 {W(L(overdue), d(overdue),
                   <ResponsiveContainer width="100%" height={200}>
-                    <BarChart data={d(overdue)} layout="vertical" margin={{ left:10 }}>
+                    <BarChart data={d(overdue)} layout="vertical" margin={{ left:10 }}
+                      onClick={(data) => {
+                        const pid2 = data?.activePayload?.[0]?.payload?.projectid || data?.activePayload?.[0]?.payload?.project_id;
+                        if (pid2) navigate(`/projects/${pid2}`);
+                        else navigate('/projects');
+                      }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" horizontal={false} />
                       <XAxis type="number" tick={{ fontSize:11 }} />
                       <YAxis dataKey="project" type="category" tick={{ fontSize:10 }} width={85} />
                       <Tooltip content={<Tip />} />
-                      <Bar dataKey="count" name="Open Issues" radius={[0,5,5,0]}>
+                      <Bar dataKey="count" name="Open Issues" radius={[0,5,5,0]} cursor="pointer">
                         {d(overdue).map((_,i) => <Cell key={i} fill={P[i%P.length]} />)}
                       </Bar>
                     </BarChart>
                   </ResponsiveContainer>
                 )}
+              </Card>
+            )}
+
+            {isAdmin && (
+              <Card title="Vendor & PO Summary" sub="Top vendors by purchase order count">
+                <div style={{ display:'grid', gridTemplateColumns:'repeat(3,1fr)', gap:8, marginBottom:12 }}>
+                  {[
+                    { label:'Total Vendors', value: vendorsRaw.length, color:'#1e3a8a' },
+                    { label:'Active POs',    value: posRaw.length,     color:'#0891b2' },
+                    { label:'Total Value',   value: `₹${(totalPoValue/100000).toFixed(1)}L`, color:'#16a34a' },
+                  ].map(c => (
+                    <div key={c.label} style={{ background:'#f8fafc', borderRadius:8, padding:'8px 10px', textAlign:'center' }}>
+                      <div style={{ fontSize:'1.2rem', fontWeight:800, color:c.color }}>{c.value}</div>
+                      <div style={{ fontSize:'0.68rem', color:'#6b7280', marginTop:2 }}>{c.label}</div>
+                    </div>
+                  ))}
+                </div>
+                {vendorPoMap.length > 0 ? (
+                  <ResponsiveContainer width="100%" height={160}>
+                    <BarChart data={vendorPoMap} margin={{ left:-10, right:4 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                      <XAxis dataKey="name" tick={{ fontSize:9 }} />
+                      <YAxis tick={{ fontSize:10 }} />
+                      <Tooltip content={<Tip />} />
+                      <Bar dataKey="count" name="POs" fill="#1e3a8a" radius={[4,4,0,0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : <Empty h={160} msg="No PO data yet" />}
               </Card>
             )}
 

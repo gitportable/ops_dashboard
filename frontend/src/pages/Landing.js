@@ -409,37 +409,7 @@ const Landing = () => {
             </motion.button>
           </form>
 
-          {/* Demo Credentials */}
-          {isLogin && (
-            <div style={{
-              marginTop: '2rem',
-              padding: '1.25rem',
-              background: 'linear-gradient(135deg, #eff6ff 0%, #fef3c7 100%)',
-              borderRadius: '14px',
-              fontSize: '0.875rem',
-              border: '1px solid #dbeafe',
-            }}>
-              <p style={{ 
-                margin: '0 0 0.75rem 0', 
-                fontWeight: '700',
-                color: '#1e3a8a',
-                display: 'flex',
-                alignItems: 'center',
-                gap: '0.5rem',
-              }}>
-                <FiZap size={16} style={{ color: '#fbbf24' }} />
-                Demo Accounts
-              </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem', color: '#475569' }}>
-                <p style={{ margin: 0, fontWeight: '600' }}>
-                  <span style={{ color: '#3b82f6' }}>SuperAdmin:</span> superadmin@example.com / 123456
-                </p>
-                <p style={{ margin: 0, fontWeight: '600' }}>
-                  <span style={{ color: '#3b82f6' }}>Admin:</span> admin@example.com / 123456
-                </p>
-              </div>
-            </div>
-          )}
+
         </div>
       </motion.div>
 

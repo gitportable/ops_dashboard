@@ -1,7 +1,9 @@
 import React, { useEffect, useState, useContext, useMemo } from "react";
 import { useParams, useNavigate } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { AuthContext } from "../auth/AuthContext";
 import {
+  createProject,
   getProjectById,
   getProjectStats,
   updateProject,
@@ -13,7 +15,7 @@ import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts";
-import { toast } from "react-hot-toast";
+import toast from "react-hot-toast";
 const C = {
   navy:    "#0f172a",
   blue:    "#1e40af",
@@ -157,7 +159,9 @@ const SprintTimeline = ({ current, total }) => {
 const ProjectDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { role } = useContext(AuthContext);
+  const isNewProject = !id || id === "new";
 
   const [project, setProject] = useState(null);
   const [stats,   setStats]   = useState([]);
@@ -165,10 +169,22 @@ const ProjectDetail = () => {
   const [members, setMembers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [tab,     setTab]     = useState("overview");
+  const [newProjectForm, setNewProjectForm] = useState({
+    projectname: "", projectid: "", status: "Active",
+    startdate: "", budgetallocated: "", budgetused: "",
+  });
+  const [creating, setCreating] = useState(false);
+  const [allUsers, setAllUsers] = useState([]);
+  const [selectedMemberIds, setSelectedMemberIds] = useState([]);
 
   const isSuperAdmin = ["admin", "superadmin"].includes((role || "").toLowerCase());
 
   useEffect(() => {
+    if (isNewProject) {
+      setLoading(false);
+      api.get('/users').then(res => setAllUsers(res.data)).catch(() => {});
+      return;
+    }
     const load = async () => {
       try {
         const [projRes, statsRes, issuesData] = await Promise.all([
@@ -191,7 +207,30 @@ const ProjectDetail = () => {
       } finally { setLoading(false); }
     };
     load();
-  }, [id, navigate]);
+  }, [id, navigate, isNewProject]);
+
+  const handleCreateProject = async () => {
+    if (!newProjectForm.projectname || !newProjectForm.projectid) {
+      toast.error("Project Name and Project ID are required.");
+      return;
+    }
+    setCreating(true);
+    try {
+      await createProject({
+        ...newProjectForm,
+        memberIds: selectedMemberIds
+      });
+      toast.success("Project created successfully.");
+      setSelectedMemberIds([]);
+      setAllUsers([]);
+      queryClient.invalidateQueries({ queryKey: ["allProjects"] });
+      navigate("/projects");
+    } catch (err) {
+      toast.error("Failed to create project.");
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const D = useMemo(() => {
     const solved  = issues.filter((i) => (i.status||"").toLowerCase() === "done").length;
@@ -233,6 +272,114 @@ const ProjectDetail = () => {
     };
   }, [issues]);
 
+  if (isNewProject) return (
+    <div style={{ minHeight: "100vh", background: C.bg, fontFamily: "'DM Sans','Segoe UI',sans-serif" }}>
+      <div style={{ padding: "2rem 2.5rem" }}>
+        <h1 style={{ margin: 0, color: C.navy, fontSize: "1.8rem", fontWeight: 800 }}>
+          Create Project
+        </h1>
+        <p style={{ marginTop: 6, color: C.slate }}>
+          Fill out the project details below.
+        </p>
+        <div style={{ background: C.card, borderRadius: 16, border: `1px solid ${C.border}`,
+          boxShadow: "0 2px 8px rgba(0,0,0,0.06)", padding: "1.5rem", marginTop: "1.5rem" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 12 }}>
+            <input
+              placeholder="Project Name"
+              value={newProjectForm.projectname}
+              onChange={(e) => setNewProjectForm({ ...newProjectForm, projectname: e.target.value })}
+              style={{ padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}` }}
+            />
+            <input
+              placeholder="Project ID"
+              value={newProjectForm.projectid}
+              onChange={(e) => setNewProjectForm({ ...newProjectForm, projectid: e.target.value })}
+              style={{ padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}` }}
+            />
+            <input
+              placeholder="Status"
+              value={newProjectForm.status}
+              onChange={(e) => setNewProjectForm({ ...newProjectForm, status: e.target.value })}
+              style={{ padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}` }}
+            />
+            <input
+              type="date"
+              placeholder="Start Date"
+              value={newProjectForm.startdate}
+              onChange={(e) => setNewProjectForm({ ...newProjectForm, startdate: e.target.value })}
+              style={{ padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}` }}
+            />
+            <input
+              type="number"
+              placeholder="Budget Allocated"
+              value={newProjectForm.budgetallocated}
+              onChange={(e) => setNewProjectForm({ ...newProjectForm, budgetallocated: e.target.value })}
+              style={{ padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}` }}
+            />
+            <input
+              type="number"
+              placeholder="Budget Used"
+              value={newProjectForm.budgetused}
+              onChange={(e) => setNewProjectForm({ ...newProjectForm, budgetused: e.target.value })}
+              style={{ padding: "10px 12px", borderRadius: 8, border: `1px solid ${C.border}` }}
+            />
+          </div>
+          {/* Assign Team Members */}
+          <div style={{ marginTop: '16px' }}>
+            <label style={{ fontWeight: 600, fontSize: '14px', color: '#1e3a8a', display: 'block', marginBottom: '8px' }}>
+              Assign Team Members (optional)
+            </label>
+            <div style={{
+              display: 'flex', flexWrap: 'wrap', gap: '8px',
+              maxHeight: '160px', overflowY: 'auto',
+              border: '1px solid #e5e7eb', borderRadius: '8px', padding: '10px'
+            }}>
+              {allUsers.map(user => (
+                <label key={user.id} style={{
+                  display: 'flex', alignItems: 'center', gap: '6px',
+                  padding: '4px 10px', borderRadius: '20px', cursor: 'pointer',
+                  backgroundColor: selectedMemberIds.includes(user.id) ? '#1e3a8a' : '#f3f4f6',
+                  color: selectedMemberIds.includes(user.id) ? '#fff' : '#374151',
+                  fontSize: '13px', transition: 'all 0.2s'
+                }}>
+                  <input
+                    type="checkbox"
+                    style={{ display: 'none' }}
+                    checked={selectedMemberIds.includes(user.id)}
+                    onChange={() => {
+                      setSelectedMemberIds(prev =>
+                        prev.includes(user.id)
+                          ? prev.filter(id => id !== user.id)
+                          : [...prev, user.id]
+                      );
+                    }}
+                  />
+                  {user.email} — <span style={{ fontSize: '11px', opacity: 0.8 }}>{user.role}</span>
+                </label>
+              ))}
+              {allUsers.length === 0 && (
+                <span style={{ color: '#9ca3af', fontSize: '13px' }}>Loading users...</span>
+              )}
+            </div>
+            {selectedMemberIds.length > 0 && (
+              <p style={{ fontSize: '12px', color: '#6b7280', marginTop: '6px' }}>
+                {selectedMemberIds.length} member(s) selected
+              </p>
+            )}
+          </div>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 16 }}>
+            <button onClick={() => navigate("/projects")} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: "#fff", cursor: "pointer", fontWeight: 600 }}>
+              Cancel
+            </button>
+            <button onClick={handleCreateProject} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: C.blue, color: "#fff", fontWeight: 700, opacity: creating ? 0.7 : 1, cursor: creating ? "progress" : "pointer" }}>
+              {creating ? "Creating..." : "Create Project"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
   if (loading) return (
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center",
       height: "60vh", flexDirection: "column", gap: 16 }}>
@@ -247,7 +394,9 @@ const ProjectDetail = () => {
   );
   if (!project) return null;
 
-  const budgetPct   = pct(project.budget_used, project.budget_allocated);
+  const used        = project.budgetused ?? project.budget_used ?? 0;
+  const allocated   = project.budgetallocated ?? project.budget_allocated ?? 0;
+  const budgetPct   = pct(used, allocated);
   const budgetColor = budgetPct > 90 ? C.red : budgetPct > 70 ? C.orange : C.green;
   const budgetLabel = budgetPct > 90 ? "⚠ Critical" : budgetPct > 70 ? "⚡ Moderate" : "✅ Healthy";
   const startDate   = project.start_date || project.startdate || project.created_at;
@@ -365,13 +514,13 @@ const ProjectDetail = () => {
                     {budgetPct}%
                   </span>
                 </div>
-                <BudgetBar used={project.budget_used} total={project.budget_allocated} />
+                <BudgetBar used={used} total={allocated} />
                 <div style={{ marginTop:"1.25rem", display:"grid",
                   gridTemplateColumns:"1fr 1fr", gap:12 }}>
                   {[
-                    { label:"Allocated", val:`$${fmt(project.budget_allocated)}`,   color:C.blueSoft },
-                    { label:"Spent",     val:`$${fmt(project.budget_used)}`,         color:budgetColor },
-                    { label:"Remaining", val:`$${fmt((project.budget_allocated||0)-(project.budget_used||0))}`, color:C.green },
+                    { label:"Allocated", val:`$${fmt(allocated)}`,   color:C.blueSoft },
+                    { label:"Spent",     val:`$${fmt(used)}`,         color:budgetColor },
+                    { label:"Remaining", val:`$${fmt((allocated||0)-(used||0))}`, color:C.green },
                     { label:"Burn Rate", val:`${budgetPct}%`,                        color:C.slate },
                   ].map(({ label, val, color }) => (
                     <div key={label} style={{
@@ -391,8 +540,8 @@ const ProjectDetail = () => {
                     </div>
                     <InlineBudgetEditor
                       projectId={project.project_id}
-                      currentUsed={project.budget_used}
-                      onSave={(val) => setProject({ ...project, budget_used: val })}
+                      currentUsed={used}
+                      onSave={(val) => setProject({ ...project, budgetused: val, budget_used: val })}
                     />
                   </div>
                 )}

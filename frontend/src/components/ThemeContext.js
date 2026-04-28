@@ -2,7 +2,7 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 
 const ThemeContext = createContext();
 
-export function ColorModeProvider({ children }) 
+export function ColorModeProvider({ children }) {
   const [mode, setMode] = useState(() => {
     const saved = localStorage.getItem('color-mode');
     if (saved) return saved;

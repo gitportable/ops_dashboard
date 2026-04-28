@@ -3,30 +3,20 @@ import { Navigate } from "react-router-dom";
 import { AuthContext } from "./AuthContext";
 
 const ProtectedRoute = ({ children, allowedRoles }) => {
-  const { role } = useContext(AuthContext);
+  const { user, loading } = useContext(AuthContext);
+  if (loading) return null;
 
-  if (role === undefined) {
-    return (
-      <div style={{
-        display: "flex", alignItems: "center", justifyContent: "center",
-        minHeight: "100vh", color: "#6b7280", fontFamily: "Inter, sans-serif",
-        fontSize: "0.95rem",
-      }}>
-        Loading…
-      </div>
-    );
-  }
+  const role = user?.role?.toLowerCase();
 
   if (!role) {
     return <Navigate to="/" replace />;
   }
 
-  const normalizedRole = role.toLowerCase();
   const normalizedAllowed = (allowedRoles || []).map((r) =>
     r.toString().toLowerCase()
   );
 
-  if (!normalizedAllowed.includes(normalizedRole)) {
+  if (!normalizedAllowed.includes(role)) {
     return <Navigate to="/unauthorized" replace />;
   }
 

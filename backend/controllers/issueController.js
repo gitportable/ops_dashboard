@@ -30,12 +30,12 @@ exports.getMyTasks = async (req, res) => {
   try {
     const userId = req.user.id;
     const result = await pool.query(
-      `SELECT i.*, p.projectname
+      `SELECT DISTINCT ON (i.issueid) i.*, p.projectname
        FROM expanded_factissues i
        JOIN expanded_factprojects p ON TRIM(i.projectid) = TRIM(p.projectid)
        JOIN project_assignments pa ON TRIM(i.projectid) = TRIM(pa.project_id)
        WHERE pa.user_id = $1
-       ORDER BY i.createddate DESC`,
+       ORDER BY i.issueid, i.createddate DESC`,
       [userId]
     );
     res.json(result.rows);
@@ -99,11 +99,16 @@ exports.getIssuesByProject = async (req, res) => {
 };
 
 exports.createIssue = async (req, res) => {
-  const { projectid, sprint, issuetype, description, assigneeteam } = req.body;
+  const { projectid, issuetype, description, assigneeteam } = req.body;
+  const sprint = req.body.sprint && req.body.sprint.trim() !== '' ? req.body.sprint : null;
 
-  if (!projectid || !issuetype || !assigneeteam) {
-    return res.status(400).json({ message: "projectid, issuetype, assigneeteam are required" });
+  if (!projectid || !issuetype) {
+    return res.status(400).json({ message: "projectid and issuetype are required" });
   }
+  const normalizedTeam = (assigneeteam || "").trim();
+  const teamValue = !normalizedTeam || normalizedTeam.toLowerCase() === "none"
+    ? "none"
+    : normalizedTeam;
 
   const validTypes = ["Bug", "Task", "Story", "Epic"];
   if (!validTypes.includes(issuetype)) {
@@ -125,7 +130,7 @@ exports.createIssue = async (req, res) => {
     const result = await pool.query(
       `INSERT INTO expanded_factissues (projectid, sprint, issuetype, createddate, assigneeteam, description, status)
        VALUES ($1, $2, $3, NOW(), $4, $5, 'Open') RETURNING *`,
-      [projectid, sprint || null, issuetype, assigneeteam, description || null]
+      [projectid, sprint, issuetype, teamValue, description || null]
     );
     const newIssue = result.rows[0];
     getIo(req)?.emit("issueCreated", newIssue);

@@ -1,40 +1,38 @@
 
-import { useContext, useState, useEffect } from "react";
+import { useContext, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { AuthContext } from "../auth/AuthContext";
-import { getIssues, getMyTasks, getMyIssues } from "../api/issueApi";
+import { getIssues, getMyTasks } from "../api/issueApi";
 import IssueTableDeveloper from "../components/IssueTableDeveloper";
 import IssueTableTester from "../components/IssueTableTester";
+import IssueTableAdmin from "../components/IssueTableAdmin";
 import { Link } from "react-router-dom";
 
 const Issues = () => {
   const { role, user } = useContext(AuthContext) || {};
   const currentRole = (role || user?.role || "").toLowerCase();
-  const [issues, setIssues] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
   const [filterSprint, setFilterSprint] = useState("all");
 
-  const fetchIssues = () => {
-    setLoading(true);
-    setError(null);
-    const fetchFn =
-      currentRole === "developer"
-        ? getMyTasks
-        : currentRole === "tester"
-        ? getMyIssues
-        : getIssues;
+  const { data: issues = [], isLoading: loading, isError, refetch } = useQuery({
+    queryKey: ["issues", currentRole],
+    enabled: !!currentRole,
+    queryFn: async () => {
+      if (["admin", "superadmin"].includes(currentRole)) {
+        const res = await getIssues();
+        return Array.isArray(res?.data) ? res.data : [];
+      }
+      if (["developer", "tester"].includes(currentRole)) {
+        const data = await getMyTasks();
+        return Array.isArray(data) ? data : [];
+      }
+      return [];
+    },
+  });
 
-    fetchFn()
-      .then((data) => setIssues(Array.isArray(data) ? data : []))
-      .catch(() => setError("Failed to load issues. Please try again."))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(() => {
-    if (currentRole) fetchIssues();
-  }, [currentRole]);
+  const error = isError ? "Failed to load issues. Please try again." : null;
+  const fetchIssues = () => refetch();
 
   const sprints = [...new Set(issues.map((i) => i.sprint).filter(Boolean))].sort();
   const statuses = [...new Set(issues.map((i) => i.status).filter(Boolean))];
@@ -155,7 +153,7 @@ const Issues = () => {
             <IssueTableTester issues={filtered} onRefresh={fetchIssues} />
           )}
           {["admin", "superadmin"].includes(currentRole) && (
-            <IssueTableDeveloper issues={filtered} onRefresh={fetchIssues} />
+            <IssueTableAdmin issues={filtered} onRefresh={fetchIssues} />
           )}
           {filtered.length === 0 && !loading && (
             <div style={{ padding: "2rem", textAlign: "center", color: "#6b7280" }}>

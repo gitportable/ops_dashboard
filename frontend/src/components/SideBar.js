@@ -424,9 +424,9 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import { AuthContext } from '../auth/AuthContext';
 import {
-  FiHome, FiBriefcase, FiAlertCircle, FiUsers,
+  FiBriefcase, FiAlertCircle, FiUsers,
   FiLogOut, FiMenu, FiX, FiZap, FiPieChart, 
-  FiActivity, FiDollarSign, FiCheckSquare, FiFileText, FiList
+  FiActivity, FiCheckSquare, FiList, FiGitBranch, FiClipboard, FiPackage, FiTruck, FiBarChart2, FiTool, FiSettings, FiLayout, FiCalendar, FiBell, FiShoppingCart, FiAlertTriangle, FiShield, FiSearch
 } from 'react-icons/fi';
 import { toast } from 'react-hot-toast';
 
@@ -448,24 +448,53 @@ const Sidebar = ({ collapsed, setCollapsed }) => {
       { label: 'Manage Users', path: '/users-management', icon: FiUsers },
       { label: 'System Health', path: '/audit-logs', icon: FiActivity },
       { label: 'All Projects', path: '/projects', icon: FiBriefcase },
+      { label: 'Approval Queue', path: '/approval-queue', icon: FiCheckSquare },
+      { label: 'Field Service', path: '/field-service', icon: FiTool },
+      { label: 'Workflow Builder', path: '/workflow-builder', icon: FiGitBranch },
+      { label: 'Work Orders', path: '/work-orders', icon: FiClipboard },
+      { label: 'Machines', path: '/machines', icon: FiSettings },
+      { label: 'Batch Tracking', path: '/batch-tracking', icon: FiPackage },
+      { label: 'Vendor Management', path: '/vendor-management', icon: FiTruck },
+      { label: 'PO Tracking', icon: FiShoppingCart, path: '/po-tracking' },
+      { label: 'KPI Dashboard', path: '/kpi-dashboard', icon: FiBarChart2 },
+      { label: 'Planning Board', path: '/roadmap', icon: FiCalendar },
+      { label: 'Defect Analytics', icon: FiAlertTriangle, path: '/defect-analytics' },
+      { label: 'CAPA Management', icon: FiShield, path: '/capa-management' },
+      { label: 'Inventory Alerts', path: '/inventory-alerts', icon: FiBell },
     ],
     admin: [
       { label: 'Dashboard', path: '/dashboard', icon: FiPieChart },
       { label: 'Resource Load', path: '/resource-allocation', icon: FiUsers },
       { label: 'All Projects', path: '/projects', icon: FiBriefcase },
       { label: 'Issues', path: '/issues', icon: FiAlertCircle },
+      { label: 'Approval Queue', path: '/approval-queue', icon: FiCheckSquare },
+      { label: 'Field Service', path: '/field-service', icon: FiTool },
+      { label: 'Work Orders', path: '/work-orders', icon: FiClipboard },
+      { label: 'Machines', path: '/machines', icon: FiSettings },
+      { label: 'Batch Tracking', path: '/batch-tracking', icon: FiPackage },
+      { label: 'Vendor Management', path: '/vendor-management', icon: FiTruck },
+      { label: 'PO Tracking', icon: FiShoppingCart, path: '/po-tracking' },
+      { label: 'KPI Dashboard', path: '/kpi-dashboard', icon: FiBarChart2 },
+      { label: 'Planning Board', path: '/roadmap', icon: FiCalendar },
+      { label: 'Defect Analytics', icon: FiAlertTriangle, path: '/defect-analytics' },
+      { label: 'CAPA Management', icon: FiShield, path: '/capa-management' },
     ],
     tester: [
       { label: 'My Dashboard', path: '/dashboard', icon: FiPieChart },
-      { label: 'QA Queue', path: '/issues', icon: FiCheckSquare },
+      { label: 'QA Queue', path: '/qa-queue', icon: FiCheckSquare },
+      { label: 'My Tasks', icon: FiList, path: '/my-tasks' },
+      { label: 'Approval Queue', path: '/approval-queue', icon: FiCheckSquare },
       { label: 'My Projects', path: '/my-projects', icon: FiBriefcase },
-      { label: 'Roadmap', path: '/roadmap', icon: FiFileText },
+      { label: 'Planning Board', path: '/roadmap', icon: FiCalendar },
+      { label: 'Defect Analytics', icon: FiAlertTriangle, path: '/defect-analytics' },
+      { label: 'My RCA & CAPA', icon: FiSearch, path: '/capa-management' },
     ],
     developer: [
       { label: 'Workboard', path: '/dashboard', icon: FiPieChart },
       { label: 'My Tasks', path: '/issues', icon: FiList },
       { label: 'My Projects', path: '/my-projects', icon: FiBriefcase },
-      { label: 'Roadmap', path: '/roadmap', icon: FiZap },
+      { label: 'Planning Board', path: '/roadmap', icon: FiCalendar },
+      { label: 'My Kanban', path: '/my-kanban', icon: FiLayout },
     ]
   };
 
